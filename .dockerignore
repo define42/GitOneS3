@@ -6,4 +6,7 @@ bin
 coverage.out
 coverage.html
 tmp
+.local
+.env
+.env.*
 *.pdf

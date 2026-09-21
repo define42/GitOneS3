@@ -1,0 +1,17 @@
+# The patched community release is source-only; do not use the older binary
+# image that predates the October 2025 security fix.
+FROM golang:1.25-alpine AS build
+RUN apk add --no-cache git
+ARG MINIO_VERSION=RELEASE.2025-10-15T17-29-55Z
+RUN git clone --depth 1 --branch "${MINIO_VERSION}" https://github.com/minio/minio.git /src
+WORKDIR /src
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/minio .
+
+FROM alpine:3.22
+RUN apk add --no-cache ca-certificates && mkdir /data && chown 1000:1000 /data
+COPY --from=build /out/minio /usr/local/bin/minio
+COPY --from=build /src/LICENSE /usr/share/licenses/minio/LICENSE
+USER 1000:1000
+ENTRYPOINT ["/usr/local/bin/minio"]

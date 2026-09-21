@@ -93,13 +93,13 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	var ownerHandler http.Handler = protocol.NewHandler(nil, nil)
 	var requestRouter proxy.Router = router
 	if cfg.Auth.Enabled {
-		google, err := auth.NewGoogle(ctx, cfg.Auth)
+		provider, err := auth.NewOIDC(ctx, cfg.Auth)
 		if err != nil {
-			return nil, fmt.Errorf("create Google authentication: %w", err)
+			return nil, fmt.Errorf("create OIDC authentication: %w", err)
 		}
 		authHandler, err := auth.New(auth.Options{
 			Config: cfg.Auth, LocalShard: shard.ShardID(cfg.LocalShard),
-			Router: router, Store: objectStore, Provider: google, Next: ownerHandler,
+			Router: router, Store: objectStore, Provider: provider, Next: ownerHandler,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create authentication handler: %w", err)

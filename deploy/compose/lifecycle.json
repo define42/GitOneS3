@@ -1,0 +1,9 @@
+{
+  "Rules": [{
+    "ID": "expire-login-transactions",
+    "Status": "Enabled",
+    "Filter": {"Prefix": "auth/transactions/"},
+    "Expiration": {"Days": 1},
+    "NoncurrentVersionExpiration": {"NoncurrentDays": 1}
+  }]
+}

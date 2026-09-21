@@ -7,15 +7,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-jose/go-jose/v4"
 	"golang.org/x/oauth2"
+
+	"github.com/define42/GitOneS3/internal/config"
 )
 
-func TestGoogleExchangeVerifiesIDToken(t *testing.T) {
+func TestOIDCExchangeVerifiesIDToken(t *testing.T) {
 	t.Parallel()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -112,19 +115,77 @@ func TestGoogleExchangeVerifiesIDToken(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			google := &Google{
+			google := &OIDC{
 				oauth:    oauth2.Config{ClientID: "client", ClientSecret: "secret", Endpoint: provider.Endpoint(), RedirectURL: "https://git.example" + CallbackPath},
 				verifier: provider.Verifier(&oidc.Config{ClientID: "client", SupportedSigningAlgs: []string{oidc.RS256}}),
 				client:   server.Client(),
+				issuer:   issuer,
 			}
 			identity, err := google.Exchange(context.Background(), "code", "pkce-verifier", "expected-nonce")
 			if name == "valid" {
-				if err != nil || identity.Subject != "google-user" {
+				if err != nil || identity.Subject != "google-user" || identity.Issuer != issuer {
 					t.Fatalf("valid identity rejected: %+v, %v", identity, err)
 				}
 			} else if err == nil {
 				t.Fatalf("%s token accepted", name)
 			}
 		})
+	}
+}
+
+func TestOIDCDiscoveryAndAuthorization(t *testing.T) {
+	t.Parallel()
+	for _, mismatch := range []bool{false, true} {
+		name := "configured issuer"
+		if mismatch {
+			name = "issuer mismatch rejected"
+		}
+		t.Run(name, func(t *testing.T) {
+			var issuer string
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/realms/gitone/.well-known/openid-configuration" {
+					http.NotFound(w, r)
+					return
+				}
+				discoveredIssuer := issuer
+				if mismatch {
+					discoveredIssuer = "https://other.example/realms/gitone"
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"issuer": discoveredIssuer, "authorization_endpoint": issuer + "/auth",
+					"token_endpoint": issuer + "/token", "jwks_uri": issuer + "/keys",
+					"id_token_signing_alg_values_supported": []string{"RS256"},
+				})
+			}))
+			defer server.Close()
+			issuer = server.URL + "/realms/gitone"
+			cfg := testConfig()
+			cfg.GoogleClientID, cfg.GoogleClientSecret = "", ""
+			cfg.OIDCIssuer, cfg.OIDCClientID, cfg.OIDCClientSecret = issuer, "gitone", "secret"
+			provider, err := newOIDC(context.Background(), cfg, server.Client())
+			if mismatch {
+				if err == nil {
+					t.Fatal("mismatched discovery issuer accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			location, err := url.Parse(provider.AuthorizationURL("state", "nonce", "verifier"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			query := location.Query()
+			if query.Get("redirect_uri") != cfg.PublicURL+"/auth/oidc/callback" ||
+				query.Get("client_id") != "gitone" || query.Get("code_challenge_method") != "S256" ||
+				query.Get("nonce") != "nonce" || query.Get("state") != "state" || query.Get("response_type") != "code" {
+				t.Fatal("OIDC authorization lost callback, client, or CSRF/PKCE parameters")
+			}
+		})
+	}
+	legacy := testConfig()
+	if legacy.IssuerURL() != config.GoogleIssuer || legacy.CallbackPath() != CallbackPath {
+		t.Fatal("legacy Google configuration changed")
 	}
 }

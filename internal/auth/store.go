@@ -8,7 +8,7 @@ import (
 	"github.com/define42/GitOneS3/internal/storage"
 )
 
-var errUsernameTaken = errors.New("username is bound to a different Google account")
+var errUsernameTaken = errors.New("username is bound to a different account")
 
 // bindUser claims a new name atomically or verifies its existing subject binding.
 // It never reassigns ownership based on email or on the requested username.
@@ -24,7 +24,7 @@ func (s *Service) bindUser(ctx context.Context, username string, identity Identi
 	if err != nil {
 		return err
 	}
-	if existing.Type != userNamespace || existing.Subject != identity.Subject {
+	if existing.Type != userNamespace || userID(existing.Identity) != userID(identity) {
 		return errUsernameTaken
 	}
 	return nil

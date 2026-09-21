@@ -44,9 +44,9 @@ Git/LFS client -> public Service -> any gitone-N
   cancellation, configuration, ACL inheritance, and HTTP health tests.
 - Private-by-default authorization primitives with public/internal visibility,
   immutable user IDs, inherited group grants, and direct repository grants.
-- Optional Google OIDC browser authentication with owner-shard code exchange,
+- Optional Google or generic OIDC browser authentication with owner-shard code exchange,
   signed/encrypted Gorilla cookies, durable single-use login state, and atomic
-  username-to-Google-subject bindings.
+  permanent username-to-provider-identity bindings.
 - Shared user/group namespace claims, creator ownership, accepted invitations,
   group member roles, and conditional membership updates that preserve an owner.
 - Bounded live-compaction planning that keeps large packs intact, selects only
@@ -78,7 +78,7 @@ Doing so would violate the S3-authoritative failure model.
 ```text
 cmd/gitone/                 process entry point
 internal/app/               dependency wiring
-internal/auth/              Google OIDC, callback routing, sessions, user bindings
+internal/auth/              OIDC, callback routing, sessions, user/group bindings
 internal/config/            environment and immutable cluster identity
 internal/shard/             canonical paths, XXH64, owner calculation
 internal/proxy/             one-hop streaming forwarding
@@ -105,10 +105,13 @@ from the mounted cluster identity.
 | `GITONE_PUBLIC_PORT` | `8080` | Shared listener for clients and shard forwarding |
 | `GITONE_INTERNAL_SCHEME` | `http` | Application-layer pod URL scheme; transport mTLS is transparent |
 | `GITONE_HEADLESS_SERVICE` | `gitone-headless` | StatefulSet DNS Service |
-| `GITONE_AUTH_ENABLED` | `false` | Enable Google OIDC authentication |
+| `GITONE_AUTH_ENABLED` | `false` | Enable OIDC authentication |
 | `GITONE_PUBLIC_URL` | required when enabled | HTTPS origin without trailing slash |
-| `GITONE_GOOGLE_CLIENT_ID` | required when enabled | Google web OAuth client ID |
-| `GITONE_GOOGLE_CLIENT_SECRET` | required when enabled | Google OAuth client secret |
+| `GITONE_GOOGLE_CLIENT_ID` | required for Google | Google web OAuth client ID |
+| `GITONE_GOOGLE_CLIENT_SECRET` | required for Google | Google OAuth client secret |
+| `GITONE_OIDC_ISSUER` | unset | Generic HTTPS OIDC issuer, e.g. a Keycloak realm; use instead of Google credentials |
+| `GITONE_OIDC_CLIENT_ID` | required with OIDC issuer | Generic OIDC client ID |
+| `GITONE_OIDC_CLIENT_SECRET` | required with OIDC issuer | Generic OIDC client secret |
 | `GITONE_COOKIE_HASH_KEY` | required when enabled | Base64 encoding of 64 random bytes, shared by all shards |
 | `GITONE_COOKIE_BLOCK_KEY` | required when enabled | Base64 encoding of 32 random bytes, shared by all shards |
 | `GITONE_CLUSTER_IDENTITY_FILE` | `/etc/gitone/identity/cluster-identity.json` | Immutable identity mount |
@@ -133,6 +136,36 @@ probes keep the shard unavailable. Production qualification must also run
 concurrent CAS acceptance tests against the exact provider/version. Configure a
 lifecycle rule for abandoned objects and old versions below
 `maintenance/capabilities/` when bucket versioning is enabled.
+
+## Local Development
+
+`make run` starts four GitOne instances, MinIO, Keycloak and a local HTTPS proxy
+using Docker Compose. It creates the buckets and imports demo accounts
+automatically. See [local setup, TLS trust and login instructions](deploy/compose/README.md).
+Use `make stop` to stop the stack without deleting data, `make logs` for logs,
+and `make smoke` to exercise real login and shared group access.
+The former single-process command is available as `make run-local`.
+
+## OIDC Providers
+
+For Keycloak or another compatible provider, set `GITONE_OIDC_ISSUER`,
+`GITONE_OIDC_CLIENT_ID`, and `GITONE_OIDC_CLIENT_SECRET`, together with enabled
+auth, an HTTPS public URL, and shared cookie keys. Do not mix these with
+`GITONE_GOOGLE_*` credentials. Register exactly
+`<GITONE_PUBLIC_URL>/auth/oidc/callback` and start login at
+`/<username>/auth/oidc/login`. The confidential client must support authorization
+code flow, PKCE S256, RS256-signed ID tokens and the `openid email` scopes;
+GitOne requires a nonempty verified email claim. Discovery pins the issuer;
+TLS, issuer, audience, signature, expiry and nonce checks remain enabled.
+
+Identities are the pair `(issuer, subject)`, never email or preferred username.
+Non-Google IDs are `oidc:` followed by base64url SHA-256 of
+`issuer + NUL + subject`. Existing Google records/sessions without an issuer
+still mean Google, and their `google:<sub>` IDs remain unchanged. Provider
+changes invalidate sessions/login attempts from the old issuer and do not
+transfer username ownership or group membership. Account migration/linking is
+not automatic. Configure the same provider on every shard and upgrade all
+shards before enabling a non-Google provider.
 
 ## Google Login
 
@@ -179,7 +212,7 @@ coordinate key updates across shards.
 
 With authentication enabled, namespace requests require a session. Personal
 spaces are restricted to their bound account; groups check current membership
-and the requested operation. The verified `google:<sub>` identity is passed to
+and the requested operation. The verified provider-scoped identity is passed to
 downstream handlers and is returned as `userId` by the session endpoint.
 Persisted per-repository ACL overrides remain an extension point; a session
 does not grant access to another user's private space. Unsafe methods require

@@ -3,6 +3,8 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/define42/GitOneS3/internal/authz"
+	"github.com/define42/GitOneS3/internal/config"
 	"github.com/define42/GitOneS3/internal/storage"
 )
 
@@ -44,7 +47,32 @@ type namespaceRecord struct {
 }
 
 func namespaceKey(name string) string { return "auth/users/" + name + ".json" }
-func userID(identity Identity) string { return "google:" + identity.Subject }
+func identityIssuer(identity Identity) string {
+	if identity.Issuer == "" {
+		return config.GoogleIssuer
+	}
+	return identity.Issuer
+}
+
+func userID(identity Identity) string {
+	issuer := identityIssuer(identity)
+	if issuer == config.GoogleIssuer {
+		return "google:" + identity.Subject
+	}
+	// A bounded identifier for the (issuer, subject) pair. Neither email nor
+	// Keycloak's mutable preferred_username participates in ownership.
+	digest := sha256.Sum256([]byte(issuer + "\x00" + identity.Subject))
+	return "oidc:" + base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+func validIdentity(identity Identity) bool {
+	return validSubject(identity.Subject) && config.ValidateIssuer(identityIssuer(identity)) == nil
+}
+
+func validSubject(subject string) bool {
+	return subject != "" && len(subject) <= 255 && !strings.ContainsFunc(subject, unicode.IsSpace) &&
+		!strings.ContainsFunc(subject, unicode.IsControl)
+}
 
 func memberRole(role string) authz.Role {
 	switch role {
@@ -60,9 +88,14 @@ func memberRole(role string) authz.Role {
 }
 
 func validUserID(id string) bool {
-	subject, ok := strings.CutPrefix(id, "google:")
-	return ok && subject != "" && len(subject) <= 255 && !strings.ContainsFunc(subject, unicode.IsSpace) &&
-		!strings.ContainsFunc(subject, unicode.IsControl)
+	if subject, ok := strings.CutPrefix(id, "google:"); ok {
+		return validSubject(subject)
+	}
+	if digest, ok := strings.CutPrefix(id, "oidc:"); ok {
+		decoded, err := base64.RawURLEncoding.Strict().DecodeString(digest)
+		return err == nil && len(decoded) == sha256.Size && len(digest) == 43
+	}
+	return false
 }
 
 func (s *Service) validateNamespaceOwner(name string) error {
@@ -118,11 +151,11 @@ func validateNamespace(record namespaceRecord) error {
 	}
 	switch record.Type {
 	case userNamespace:
-		if !validUserID(userID(record.Identity)) || record.CreatorUserID != "" || len(record.Members) != 0 || len(record.Invitations) != 0 {
+		if !validIdentity(record.Identity) || record.CreatorUserID != "" || len(record.Members) != 0 || len(record.Invitations) != 0 {
 			return errors.New("invalid user namespace")
 		}
 	case groupNamespace:
-		if record.Subject != "" || record.Email != "" || !validUserID(record.CreatorUserID) || len(record.Members) == 0 ||
+		if record.Subject != "" || record.Email != "" || record.Issuer != "" || !validUserID(record.CreatorUserID) || len(record.Members) == 0 ||
 			len(record.Members) > maxGroupEntries || len(record.Invitations) > maxGroupEntries {
 			return errors.New("invalid group namespace")
 		}

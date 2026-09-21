@@ -31,6 +31,7 @@ const (
 )
 
 type loginState struct {
+	Issuer   string `json:",omitempty"`
 	Username string
 	Owner    shard.ShardID
 	ID       string
@@ -55,7 +56,7 @@ type session struct {
 
 type subjectKey struct{}
 
-// Subject returns the verified Google subject attached to a request.
+// Subject returns the verified provider-scoped identity attached to a request.
 func Subject(ctx context.Context) (authz.Subject, bool) {
 	subject, ok := ctx.Value(subjectKey{}).(authz.Subject)
 	return subject, ok
@@ -79,6 +80,8 @@ type Service struct {
 	provider     Provider
 	next         http.Handler
 	origin       string
+	issuer       string
+	callbackPath string
 	loginCodec   *securecookie.SecureCookie
 	sessionCodec *securecookie.SecureCookie
 }
@@ -100,6 +103,7 @@ func New(options Options) (*Service, error) {
 	return &Service{
 		local: options.LocalShard, router: options.Router, store: options.Store,
 		provider: options.Provider, next: options.Next, origin: options.Config.PublicURL,
+		issuer: options.Config.IssuerURL(), callbackPath: options.Config.CallbackPath(),
 		loginCodec:   securecookie.New(hash, block).MaxAge(int(loginLifetime.Seconds())).SetSerializer(securecookie.JSONEncoder{}),
 		sessionCodec: securecookie.New(hash, block).MaxAge(int(sessionLifetime.Seconds())).SetSerializer(securecookie.JSONEncoder{}),
 	}, nil
@@ -110,7 +114,7 @@ func (s *Service) ShardCount() uint32 { return s.router.ShardCount() }
 // Resolve authenticates callback routing data without exchanging the code.
 // State never supplies a URL or hostname; destinations come from shard DNS.
 func (s *Service) Resolve(r *http.Request) (shard.Route, error) {
-	if r.URL.Path == CallbackPath {
+	if r.URL.Path == s.callbackPath {
 		state, err := s.decodeState(r)
 		if err != nil {
 			return shard.Route{}, err
@@ -147,7 +151,8 @@ func (s *Service) decodeState(r *http.Request) (loginState, error) {
 	owner, err := s.router.Owner(state.Username)
 	id, idErr := base64.RawURLEncoding.DecodeString(state.ID)
 	if err != nil || state.Username == "auth" || state.Owner != owner || state.Origin != s.origin ||
-		state.Expires <= time.Now().Unix() || idErr != nil || len(id) != 32 {
+		state.Expires <= time.Now().Unix() || idErr != nil || len(id) != 32 ||
+		identityIssuer(Identity{Issuer: state.Issuer}) != s.issuer {
 		return state, errors.New("invalid callback state")
 	}
 	return state, nil
@@ -165,12 +170,14 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication routing mismatch", http.StatusBadGateway)
 		return
 	}
-	if r.URL.Path == CallbackPath {
+	if r.URL.Path == s.callbackPath {
 		s.callback(w, r)
 		return
 	}
 	username := route.Path.TopLevel
-	if r.URL.Path == "/"+username+"/auth/google/login" {
+	loginPath := "/" + username + "/auth/oidc/login"
+	legacyLogin := s.issuer == config.GoogleIssuer && r.URL.Path == "/"+username+"/auth/google/login"
+	if r.URL.Path == loginPath || legacyLogin {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, "GET")
 			return
@@ -209,7 +216,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveGroup(w, r, username, current, record)
 		return
 	}
-	if current.Username != username || record.Subject != current.Identity.Subject {
+	if current.Username != username || userID(record.Identity) != userID(current.Identity) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -273,6 +280,9 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request, username string)
 		return
 	}
 	state := loginState{Username: username, Owner: s.local, ID: id, Origin: s.origin, Expires: time.Now().Add(loginLifetime).Unix()}
+	if s.issuer != config.GoogleIssuer {
+		state.Issuer = s.issuer
+	}
 	tx := transaction{State: state, BrowserHash: sha256.Sum256([]byte(browser)), Nonce: nonce, Verifier: verifier}
 	encodedTx, err := s.loginCodec.Encode(transactionLabel, tx)
 	if err != nil {
@@ -338,12 +348,12 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	setCookie(w, loginCookie, "", -1)
 	if query.Get("error") != "" {
-		http.Error(w, "Google login declined", http.StatusUnauthorized)
+		http.Error(w, "login declined", http.StatusUnauthorized)
 		return
 	}
 	identity, err := s.provider.Exchange(ctx, query.Get("code"), tx.Verifier, tx.Nonce)
-	if err != nil || identity.Subject == "" {
-		http.Error(w, "Google authentication failed", http.StatusUnauthorized)
+	if err != nil || !validIdentity(identity) || identityIssuer(identity) != s.issuer {
+		http.Error(w, "authentication failed", http.StatusUnauthorized)
 		return
 	}
 	if err := s.bindUser(ctx, state.Username, identity); err != nil {
@@ -378,7 +388,8 @@ func (s *Service) readSession(r *http.Request) (session, error) {
 	if err := s.sessionCodec.Decode(sessionCookie, value, &current); err != nil {
 		return current, err
 	}
-	if current.Expires <= time.Now().Unix() || current.Origin != s.origin || current.Identity.Subject == "" || current.CSRF == "" {
+	if current.Expires <= time.Now().Unix() || current.Origin != s.origin || !validIdentity(current.Identity) ||
+		identityIssuer(current.Identity) != s.issuer || current.CSRF == "" {
 		return current, errors.New("invalid session")
 	}
 	if _, err := s.router.Owner(current.Username); err != nil {

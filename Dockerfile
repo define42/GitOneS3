@@ -13,7 +13,14 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     -ldflags="-s -w -X main.version=${VERSION}" \
     -o /out/gitone ./cmd/gitone
 
-FROM gcr.io/distroless/static-debian12:nonroot
+# Compose uses BusyBox's wget for readiness checks; production stays distroless.
+FROM alpine:3.22 AS development
+RUN apk add --no-cache ca-certificates
+COPY --from=build /out/gitone /usr/local/bin/gitone
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/gitone"]
+
+FROM gcr.io/distroless/static-debian12:nonroot AS production
 COPY --from=build /out/gitone /usr/local/bin/gitone
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/gitone"]

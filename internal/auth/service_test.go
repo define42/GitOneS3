@@ -47,6 +47,86 @@ func testConfig() config.Auth {
 		CookieBlockKey: base64.StdEncoding.EncodeToString([]byte(strings.Repeat("e", 32)))}
 }
 
+func testOIDCService(t *testing.T, store storage.ObjectStore, provider Provider) *Service {
+	t.Helper()
+	legacy := testService(t, 1, store, provider, nil)
+	cfg := testConfig()
+	cfg.GoogleClientID, cfg.GoogleClientSecret = "", ""
+	cfg.OIDCIssuer = "https://keycloak.example/realms/gitone"
+	cfg.OIDCClientID, cfg.OIDCClientSecret = "gitone", "secret"
+	s, err := New(Options{
+		Config: cfg, LocalShard: legacy.local, Router: legacy.router,
+		Store: store, Provider: provider, Next: legacy.next,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestOIDCLoginAndIssuerIsolation(t *testing.T) {
+	t.Parallel()
+	issuer := "https://keycloak.example/realms/gitone"
+	for _, test := range []struct {
+		name           string
+		identityIssuer string
+		want           int
+	}{
+		{name: "configured issuer", identityIssuer: issuer, want: http.StatusSeeOther},
+		{name: "other realm", identityIssuer: "https://keycloak.example/realms/other", want: http.StatusUnauthorized},
+		{name: "legacy Google identity", identityIssuer: "", want: http.StatusUnauthorized},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &fakeProvider{identity: Identity{Issuer: test.identityIssuer, Subject: "alice", Email: "alice@example.com"}}
+			store := storage.NewMemoryStore()
+			s := testOIDCService(t, store, provider)
+			login := httptest.NewRecorder()
+			s.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/alice/auth/oidc/login", nil))
+			if login.Code != http.StatusFound {
+				t.Fatalf("OIDC login = %d", login.Code)
+			}
+			location, err := url.Parse(login.Header().Get("Location"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			callback := callbackRequest(location.Query().Get("state"), login.Result().Cookies()[0])
+			callback.URL.Path = "/auth/oidc/callback"
+			other := testService(t, 1, store, provider, nil)
+			if _, err := other.decodeState(callback); err == nil {
+				t.Fatal("Keycloak state accepted by Google configuration")
+			}
+			response := httptest.NewRecorder()
+			s.ServeHTTP(response, callback)
+			if response.Code != test.want {
+				t.Fatalf("OIDC callback = %d, want %d: %s", response.Code, test.want, response.Body.String())
+			}
+			if test.want != http.StatusSeeOther {
+				return
+			}
+			var cookie *http.Cookie
+			for _, candidate := range response.Result().Cookies() {
+				if candidate.Name == sessionCookie {
+					cookie = candidate
+				}
+			}
+			if cookie == nil || !cookie.Secure || !cookie.HttpOnly {
+				t.Fatal("secure session cookie missing")
+			}
+			request := httptest.NewRequest(http.MethodGet, "/alice/auth/session", nil)
+			request.AddCookie(cookie)
+			if _, err := other.readSession(request); err == nil {
+				t.Fatal("Keycloak session accepted by Google configuration")
+			}
+			restarted := testOIDCService(t, store, provider)
+			w := httptest.NewRecorder()
+			restarted.ServeHTTP(w, request)
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"userId":"oidc:`) {
+				t.Fatalf("Keycloak session failed after restart: %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func testService(t *testing.T, local shard.ShardID, store storage.ObjectStore, provider Provider, next http.Handler) *Service {
 	t.Helper()
 	parser, err := shard.NewParser(shard.DefaultPathPolicy())

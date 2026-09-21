@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "shardCount": 4,
+  "hashAlgorithm": "xxhash64",
+  "canonicalization": "lowercase-ascii-v1",
+  "bucketPrefix": "gitone-local-shard",
+  "s3Endpoint": "http://minio:9000",
+  "s3Region": "us-east-1",
+  "maxTopLevelLength": 63,
+  "maxComponentLength": 255,
+  "maxPathDepth": 32
+}
