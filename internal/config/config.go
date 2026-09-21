@@ -15,7 +15,6 @@ import (
 const (
 	DefaultListenAddress       = "0.0.0.0"
 	DefaultPublicPort          = uint16(8080)
-	DefaultInternalPort        = uint16(8081)
 	DefaultInternalScheme      = "http"
 	DefaultHeadlessService     = "gitone-headless"
 	DefaultS3Region            = "us-east-1"
@@ -48,7 +47,6 @@ type Config struct {
 	LocalShard          uint32
 	ListenAddress       string
 	PublicPort          uint16
-	InternalPort        uint16
 	InternalScheme      string
 	HeadlessService     string
 	Namespace           string
@@ -104,10 +102,6 @@ func Load(lookup LookupEnv) (Config, error) {
 	}
 
 	publicPort, err := uint16Value(lookup, "GITONE_PUBLIC_PORT", DefaultPublicPort)
-	if err != nil {
-		return Config{}, err
-	}
-	internalPort, err := uint16Value(lookup, "GITONE_INTERNAL_PORT", DefaultInternalPort)
 	if err != nil {
 		return Config{}, err
 	}
@@ -189,7 +183,6 @@ func Load(lookup LookupEnv) (Config, error) {
 		LocalShard:          localShard,
 		ListenAddress:       value(lookup, "GITONE_LISTEN_ADDRESS", DefaultListenAddress),
 		PublicPort:          publicPort,
-		InternalPort:        internalPort,
 		InternalScheme:      value(lookup, "GITONE_INTERNAL_SCHEME", DefaultInternalScheme),
 		HeadlessService:     value(lookup, "GITONE_HEADLESS_SERVICE", DefaultHeadlessService),
 		Namespace:           requiredValue(lookup, "POD_NAMESPACE"),
@@ -243,11 +236,8 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.ListenAddress) == "" {
 		return fmt.Errorf("config: listen address is required")
 	}
-	if c.PublicPort == 0 || c.InternalPort == 0 {
-		return fmt.Errorf("config: public and internal ports must be greater than zero")
-	}
-	if c.PublicPort == c.InternalPort {
-		return fmt.Errorf("config: public and internal ports must differ")
+	if c.PublicPort == 0 {
+		return fmt.Errorf("config: public port must be greater than zero")
 	}
 	if c.InternalScheme != "http" {
 		return fmt.Errorf(

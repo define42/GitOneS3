@@ -66,9 +66,6 @@ spec:
             - name: public
               containerPort: {{ .Values.service.publicPort }}
               protocol: TCP
-            - name: internal
-              containerPort: {{ .Values.service.internalPort }}
-              protocol: TCP
           env:
             - name: TMPDIR
               value: /var/lib/gitone/work
@@ -86,8 +83,6 @@ spec:
               value: {{ .Values.listenAddress | quote }}
             - name: GITONE_PUBLIC_PORT
               value: {{ .Values.service.publicPort | quote }}
-            - name: GITONE_INTERNAL_PORT
-              value: {{ .Values.service.internalPort | quote }}
             - name: GITONE_INTERNAL_SCHEME
               value: {{ .Values.service.internalScheme | quote }}
             - name: GITONE_HEADLESS_SERVICE

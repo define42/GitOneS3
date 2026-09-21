@@ -19,9 +19,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{- define "gitone.validateValues" -}}
-{{- if eq (int .Values.service.publicPort) (int .Values.service.internalPort) -}}
-{{- fail "service.publicPort and service.internalPort must differ" -}}
-{{- end -}}
 {{- if gt (int .Values.pack.maxSmallPackCount) (int .Values.pack.maxPackCount) -}}
 {{- fail "pack.maxSmallPackCount cannot exceed pack.maxPackCount" -}}
 {{- end -}}

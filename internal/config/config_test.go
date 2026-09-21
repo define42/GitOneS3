@@ -18,7 +18,6 @@ func TestLoadDefaults(t *testing.T) {
 		LocalShard:          173,
 		ListenAddress:       DefaultListenAddress,
 		PublicPort:          DefaultPublicPort,
-		InternalPort:        DefaultInternalPort,
 		InternalScheme:      DefaultInternalScheme,
 		HeadlessService:     DefaultHeadlessService,
 		Namespace:           "gitone-system",
@@ -57,7 +56,6 @@ func TestLoadOverrides(t *testing.T) {
 	environment["POD_NAMESPACE"] = "source-control"
 	environment["GITONE_LISTEN_ADDRESS"] = "127.0.0.1"
 	environment["GITONE_PUBLIC_PORT"] = "9000"
-	environment["GITONE_INTERNAL_PORT"] = "9001"
 	environment["GITONE_HEADLESS_SERVICE"] = "shards"
 	environment["GITONE_CLUSTER_IDENTITY_FILE"] = "/run/gitone/identity.json"
 	environment["GITONE_S3_ENDPOINT"] = "http://minio.storage.svc:9000"
@@ -116,7 +114,6 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 		{name: "missing namespace", key: "POD_NAMESPACE", deleteKey: true, errorMatch: "pod namespace"},
 		{name: "invalid namespace", key: "POD_NAMESPACE", value: "GitOne", errorMatch: "dns label"},
 		{name: "invalid public port", key: "GITONE_PUBLIC_PORT", value: "70000", errorMatch: "port between"},
-		{name: "same ports", key: "GITONE_INTERNAL_PORT", value: "8080", errorMatch: "ports must differ"},
 		{name: "unsupported internal https", key: "GITONE_INTERNAL_SCHEME", value: "https", errorMatch: "must be http"},
 		{name: "invalid internal scheme", key: "GITONE_INTERNAL_SCHEME", value: "tcp", errorMatch: "must be http"},
 		{name: "invalid path style", key: "GITONE_S3_PATH_STYLE", value: "sometimes", errorMatch: "must be a boolean"},

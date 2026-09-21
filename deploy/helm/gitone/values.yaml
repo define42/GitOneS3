@@ -19,7 +19,6 @@ serviceAccount:
 service:
   type: ClusterIP
   publicPort: 8080
-  internalPort: 8081
   internalScheme: http
   headlessName: gitone-headless
   annotations: {}

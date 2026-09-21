@@ -15,9 +15,13 @@ destination and port used by the installation.
 Choose a globally unique `s3.bucketPrefix`; the default is suitable only as a
 development/example value.
 
-Internal forwarding uses application-layer `http` without a shared token or
+Client requests and internal forwarding use the same `service.publicPort`
+(default `8080`). Forwarding uses application-layer `http` without a shared token or
 caller authentication. A forwarding marker prevents repeated hops. Transparent
 service-mesh mTLS can be configured independently if desired.
+
+Remove the obsolete `service.internalPort` from custom values files when
+upgrading from a two-port release.
 
 When upgrading from a token-based release, remove `internalAuth` from custom
 values files. Coordinate the shard update: older pods still require a token

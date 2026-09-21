@@ -16,13 +16,6 @@ spec:
     - ports:
         - protocol: TCP
           port: {{ .Values.service.publicPort }}
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "gitone.selectorLabels" . | nindent 14 }}
-      ports:
-        - protocol: TCP
-          port: {{ .Values.service.internalPort }}
   egress:
     - to:
         - podSelector:
@@ -30,7 +23,7 @@ spec:
               {{- include "gitone.selectorLabels" . | nindent 14 }}
       ports:
         - protocol: TCP
-          port: {{ .Values.service.internalPort }}
+          port: {{ .Values.service.publicPort }}
     - ports:
         - protocol: UDP
           port: 53

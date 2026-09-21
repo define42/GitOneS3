@@ -1,4 +1,4 @@
-// Package httpserver owns GitOne's public and internal HTTP server lifecycle.
+// Package httpserver owns GitOne's HTTP server lifecycle.
 package httpserver
 
 import (
@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"sync"
 	"time"
 )
 
@@ -27,110 +26,64 @@ type Checker interface {
 	Check(context.Context) error
 }
 
-// Servers runs separate public and internal listeners.
-type Servers struct {
-	public   *http.Server
-	internal *http.Server
-	logger   *slog.Logger
+// Server serves client and forwarded requests on one HTTP listener.
+type Server struct {
+	httpServer *http.Server
+	logger     *slog.Logger
 }
 
-// New constructs streaming-safe HTTP servers. Read and write timeouts remain
-// unset because Git and LFS transfers can legitimately be long-lived; request
-// contexts and ingress policy provide cancellation and transfer limits.
-func New(
-	publicAddress string,
-	publicHandler http.Handler,
-	internalAddress string,
-	internalHandler http.Handler,
-	logger *slog.Logger,
-) (*Servers, error) {
-	if publicHandler == nil || internalHandler == nil {
-		return nil, errors.New("public and internal handlers are required")
+// New constructs a streaming-safe HTTP server. Read and write timeouts remain
+// unset because Git and LFS transfers can legitimately be long-lived.
+func New(address string, handler http.Handler, logger *slog.Logger) (*Server, error) {
+	if handler == nil {
+		return nil, errors.New("handler is required")
 	}
-	if publicAddress == "" || internalAddress == "" {
-		return nil, errors.New("public and internal addresses are required")
-	}
-	if publicAddress == internalAddress {
-		return nil, errors.New("public and internal addresses must differ")
+	if address == "" {
+		return nil, errors.New("listen address is required")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-
-	return &Servers{
-		public:   newServer(publicAddress, publicHandler),
-		internal: newServer(internalAddress, internalHandler),
-		logger:   logger,
-	}, nil
+	return &Server{httpServer: newServer(address, handler), logger: logger}, nil
 }
 
-// Run serves until context cancellation or a listener failure, then shuts
-// both listeners down before returning.
-func (s *Servers) Run(ctx context.Context) error {
-	s.logger.InfoContext(
-		ctx,
-		"http servers starting",
-		"public_address", s.public.Addr,
-		"internal_address", s.internal.Addr,
-	)
-	serveErrors := make(chan error, 2)
-	var listeners sync.WaitGroup
-	serve := func(name string, server *http.Server) {
-		defer listeners.Done()
-		err := server.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveErrors <- fmt.Errorf("serve %s listener: %w", name, err)
-			return
-		}
-		serveErrors <- nil
+// Run serves until context cancellation or a listener failure, then shuts down.
+func (s *Server) Run(ctx context.Context) error {
+	listener, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return fmt.Errorf("listen HTTP: %w", err)
 	}
-
-	listeners.Add(2)
-	go serve("public", s.public)
-	go serve("internal", s.internal)
+	s.logger.InfoContext(ctx, "http server starting", "address", listener.Addr().String())
+	serveErrors := make(chan error, 1)
+	go func() {
+		err := s.httpServer.Serve(listener)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		serveErrors <- err
+	}()
 
 	var runErr error
+	var stopped bool
 	select {
 	case <-ctx.Done():
 	case runErr = <-serveErrors:
+		stopped = true
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultShutdownTimeout)
 	defer cancel()
-	shutdownErr := s.shutdown(shutdownCtx)
+	shutdownErr := s.httpServer.Shutdown(shutdownCtx)
 	if shutdownErr != nil {
-		shutdownErr = errors.Join(
-			shutdownErr,
-			s.public.Close(),
-			s.internal.Close(),
-		)
+		shutdownErr = errors.Join(shutdownErr, s.httpServer.Close())
 	}
-	listeners.Wait()
-	if runErr != nil {
-		return errors.Join(runErr, shutdownErr)
+	if !stopped {
+		runErr = <-serveErrors
 	}
-	if shutdownErr != nil {
-		return fmt.Errorf("shutdown HTTP servers: %w", shutdownErr)
+	if err := errors.Join(runErr, shutdownErr); err != nil {
+		return fmt.Errorf("run HTTP server: %w", err)
 	}
-
 	return nil
-}
-
-func (s *Servers) shutdown(ctx context.Context) error {
-	errorsByServer := make([]error, 2)
-	var shutdowns sync.WaitGroup
-	shutdowns.Add(2)
-	go func() {
-		defer shutdowns.Done()
-		errorsByServer[0] = s.public.Shutdown(ctx)
-	}()
-	go func() {
-		defer shutdowns.Done()
-		errorsByServer[1] = s.internal.Shutdown(ctx)
-	}()
-	shutdowns.Wait()
-
-	return errors.Join(errorsByServer...)
 }
 
 // WithHealth reserves liveness and readiness routes ahead of namespace

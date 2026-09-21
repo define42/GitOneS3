@@ -10,7 +10,7 @@ spec:
   selector:
     {{- include "gitone.selectorLabels" . | nindent 4 }}
   ports:
-    - name: internal
+    - name: public
       protocol: TCP
-      port: {{ .Values.service.internalPort }}
-      targetPort: internal
+      port: {{ .Values.service.publicPort }}
+      targetPort: public

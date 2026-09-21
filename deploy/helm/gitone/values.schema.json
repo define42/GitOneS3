@@ -52,11 +52,10 @@
     "service": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "publicPort", "internalPort", "internalScheme", "headlessName", "annotations"],
+      "required": ["type", "publicPort", "internalScheme", "headlessName", "annotations"],
       "properties": {
         "type": {"type": "string", "enum": ["ClusterIP", "LoadBalancer", "NodePort"]},
         "publicPort": {"type": "integer", "minimum": 1, "maximum": 65535},
-        "internalPort": {"type": "integer", "minimum": 1, "maximum": 65535},
         "internalScheme": {"type": "string", "enum": ["http"]},
         "headlessName": {
           "type": "string",

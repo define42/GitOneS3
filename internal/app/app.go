@@ -22,9 +22,9 @@ import (
 	"github.com/define42/GitOneS3/internal/storage/s3store"
 )
 
-// App owns the two HTTP listeners and forwarding transport for one shard.
+// App owns the HTTP listener and forwarding transport for one shard.
 type App struct {
-	servers          *httpserver.Servers
+	server           *httpserver.Server
 	forwardTransport *http.Transport
 }
 
@@ -79,7 +79,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		StatefulSet:     "gitone",
 		HeadlessService: cfg.HeadlessService,
 		Namespace:       cfg.Namespace,
-		Port:            cfg.InternalPort,
+		Port:            cfg.PublicPort,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create shard destination resolver: %w", err)
@@ -106,28 +106,22 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		httpserver.LogRequests(routingHandler, shardLogger),
 		objectStore,
 	)
-	privateHandler := httpserver.WithHealth(
-		httpserver.LogRequests(routingHandler, shardLogger),
-		objectStore,
-	)
-	servers, err := httpserver.New(
+	server, err := httpserver.New(
 		listenAddress(cfg.ListenAddress, cfg.PublicPort),
 		publicHandler,
-		listenAddress(cfg.ListenAddress, cfg.InternalPort),
-		privateHandler,
 		shardLogger,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create HTTP servers: %w", err)
+		return nil, fmt.Errorf("create HTTP server: %w", err)
 	}
 
-	return &App{servers: servers, forwardTransport: forwardTransport}, nil
+	return &App{server: server, forwardTransport: forwardTransport}, nil
 }
 
 // Run serves until context cancellation or a listener error.
 func (a *App) Run(ctx context.Context) error {
 	defer a.forwardTransport.CloseIdleConnections()
-	return a.servers.Run(ctx)
+	return a.server.Run(ctx)
 }
 
 func listenAddress(host string, port uint16) string {

@@ -30,7 +30,7 @@ Git/LFS client -> public Service -> any gitone-N
   keys, traversal, malformed escaping, encoded separators, and reserved names.
 - Streaming `httputil.ReverseProxy` forwarding to stable StatefulSet DNS with
   context cancellation and no request/response body buffering.
-- Separate public and internal listeners, internal-header stripping, and
+- One HTTP listener for client and forwarded requests, internal-header stripping, and
   one-hop routing mismatch rejection.
 - Immutable cluster identity validation for routing, path policy, and the
   per-shard S3 bucket mapping.
@@ -46,7 +46,7 @@ Git/LFS client -> public Service -> any gitone-N
   immutable user IDs, inherited group grants, and direct repository grants.
 - Bounded live-compaction planning that keeps large packs intact, selects only
   fragmented small packs plus the incoming pack, and queues oversized work.
-- S3-backed readiness, structured request logs, graceful dual-listener
+- S3-backed readiness, structured request logs, graceful HTTP
   shutdown, a non-root container image, and a configurable Helm deployment.
 - Exact pack-fragmentation defaults from the architecture document.
 
@@ -97,8 +97,7 @@ from the mounted cluster identity.
 | `POD_NAME` | required | Canonical `gitone-N` owner ordinal |
 | `POD_NAMESPACE` | required | Kubernetes namespace for stable DNS |
 | `GITONE_LISTEN_ADDRESS` | `0.0.0.0` | Bind address |
-| `GITONE_PUBLIC_PORT` | `8080` | Public Service listener |
-| `GITONE_INTERNAL_PORT` | `8081` | Pod-to-pod listener |
+| `GITONE_PUBLIC_PORT` | `8080` | Shared listener for clients and shard forwarding |
 | `GITONE_INTERNAL_SCHEME` | `http` | Application-layer pod URL scheme; transport mTLS is transparent |
 | `GITONE_HEADLESS_SERVICE` | `gitone-headless` | StatefulSet DNS Service |
 | `GITONE_CLUSTER_IDENTITY_FILE` | `/etc/gitone/identity/cluster-identity.json` | Immutable identity mount |
