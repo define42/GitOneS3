@@ -8,6 +8,7 @@
     "serviceAccount",
     "service",
     "listenAddress",
+    "auth",
     "s3",
     "clusterIdentity",
     "pack",
@@ -66,6 +67,25 @@
       }
     },
     "listenAddress": {"type": "string", "minLength": 1},
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "publicURL", "googleClientID", "existingSecret"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "publicURL": {"type": "string"},
+        "googleClientID": {"type": "string"},
+        "existingSecret": {"type": "string"}
+      },
+      "if": {"properties": {"enabled": {"const": true}}},
+      "then": {
+        "properties": {
+          "publicURL": {"pattern": "^https://[^/?#@]+$"},
+          "googleClientID": {"minLength": 1},
+          "existingSecret": {"minLength": 1}
+        }
+      }
+    },
     "s3": {
       "type": "object",
       "additionalProperties": false,

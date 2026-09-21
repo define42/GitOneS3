@@ -67,6 +67,29 @@ spec:
               containerPort: {{ .Values.service.publicPort }}
               protocol: TCP
           env:
+            - name: GITONE_AUTH_ENABLED
+              value: {{ .Values.auth.enabled | quote }}
+            {{- if .Values.auth.enabled }}
+            - name: GITONE_PUBLIC_URL
+              value: {{ .Values.auth.publicURL | quote }}
+            - name: GITONE_GOOGLE_CLIENT_ID
+              value: {{ .Values.auth.googleClientID | quote }}
+            - name: GITONE_GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: google-client-secret
+            - name: GITONE_COOKIE_HASH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: cookie-hash-key
+            - name: GITONE_COOKIE_BLOCK_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: cookie-block-key
+            {{- end }}
             - name: TMPDIR
               value: /var/lib/gitone/work
             - name: GITONE_SHARD_COUNT

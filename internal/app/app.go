@@ -14,6 +14,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
+	"github.com/define42/GitOneS3/internal/auth"
 	"github.com/define42/GitOneS3/internal/config"
 	"github.com/define42/GitOneS3/internal/httpserver"
 	"github.com/define42/GitOneS3/internal/protocol"
@@ -89,10 +90,26 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return nil, err
 	}
-	ownerHandler := protocol.NewHandler(nil, nil)
+	var ownerHandler http.Handler = protocol.NewHandler(nil, nil)
+	var requestRouter proxy.Router = router
+	if cfg.Auth.Enabled {
+		google, err := auth.NewGoogle(ctx, cfg.Auth)
+		if err != nil {
+			return nil, fmt.Errorf("create Google authentication: %w", err)
+		}
+		authHandler, err := auth.New(auth.Options{
+			Config: cfg.Auth, LocalShard: shard.ShardID(cfg.LocalShard),
+			Router: router, Store: objectStore, Provider: google, Next: ownerHandler,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create authentication handler: %w", err)
+		}
+		ownerHandler = authHandler
+		requestRouter = authHandler
+	}
 	routingHandler, err := proxy.NewHandler(proxy.HandlerOptions{
 		LocalShard: shard.ShardID(cfg.LocalShard),
-		Router:     router,
+		Router:     requestRouter,
 		Resolver:   destinationResolver,
 		Next:       ownerHandler,
 		Transport:  forwardTransport,

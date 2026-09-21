@@ -44,6 +44,9 @@ Git/LFS client -> public Service -> any gitone-N
   cancellation, configuration, ACL inheritance, and HTTP health tests.
 - Private-by-default authorization primitives with public/internal visibility,
   immutable user IDs, inherited group grants, and direct repository grants.
+- Optional Google OIDC browser authentication with owner-shard code exchange,
+  signed/encrypted Gorilla cookies, durable single-use login state, and atomic
+  username-to-Google-subject bindings.
 - Bounded live-compaction planning that keeps large packs intact, selects only
   fragmented small packs plus the incoming pack, and queues oversized work.
 - S3-backed readiness, structured request logs, graceful HTTP
@@ -57,7 +60,7 @@ external contracts unspecified. The owner-side dispatcher recognizes standard
 Git Smart HTTP and Git LFS routes, but currently returns `501 Not Implemented`
 until these engines are installed:
 
-- namespace allocation and the globally consistent login/group registry;
+- group namespace allocation and a globally consistent group registry;
 - repository path metadata and creation APIs;
 - `git-upload-pack` / `git-receive-pack`, pack validation, and ref semantics;
 - the `control.git` compiler and persisted ACL generations;
@@ -74,6 +77,7 @@ Doing so would violate the S3-authoritative failure model.
 ```text
 cmd/gitone/                 process entry point
 internal/app/               dependency wiring
+internal/auth/              Google OIDC, callback routing, sessions, user bindings
 internal/config/            environment and immutable cluster identity
 internal/shard/             canonical paths, XXH64, owner calculation
 internal/proxy/             one-hop streaming forwarding
@@ -100,6 +104,12 @@ from the mounted cluster identity.
 | `GITONE_PUBLIC_PORT` | `8080` | Shared listener for clients and shard forwarding |
 | `GITONE_INTERNAL_SCHEME` | `http` | Application-layer pod URL scheme; transport mTLS is transparent |
 | `GITONE_HEADLESS_SERVICE` | `gitone-headless` | StatefulSet DNS Service |
+| `GITONE_AUTH_ENABLED` | `false` | Enable Google OIDC authentication |
+| `GITONE_PUBLIC_URL` | required when enabled | HTTPS origin without trailing slash |
+| `GITONE_GOOGLE_CLIENT_ID` | required when enabled | Google web OAuth client ID |
+| `GITONE_GOOGLE_CLIENT_SECRET` | required when enabled | Google OAuth client secret |
+| `GITONE_COOKIE_HASH_KEY` | required when enabled | Base64 encoding of 64 random bytes, shared by all shards |
+| `GITONE_COOKIE_BLOCK_KEY` | required when enabled | Base64 encoding of 32 random bytes, shared by all shards |
 | `GITONE_CLUSTER_IDENTITY_FILE` | `/etc/gitone/identity/cluster-identity.json` | Immutable identity mount |
 | `GITONE_S3_ENDPOINT` | AWS regional endpoint | S3-compatible endpoint |
 | `GITONE_S3_REGION` | `us-east-1` | AWS region |
@@ -122,6 +132,66 @@ probes keep the shard unavailable. Production qualification must also run
 concurrent CAS acceptance tests against the exact provider/version. Configure a
 lifecycle rule for abandoned objects and old versions below
 `maintenance/capabilities/` when bucket versioning is enabled.
+
+## Google Login
+
+Create a Google OAuth web client and register exactly
+`https://git.example.com/auth/google/callback` as its authorized redirect URI.
+Set the authentication variables above on every shard using the same client
+credentials and cookie keys. Generate the keys independently with
+`openssl rand -base64 64` and `openssl rand -base64 32`; keep them in your secret
+manager. HTTPS is required at the public ingress; pod forwarding still uses
+the single HTTP port. Incomplete enabled configuration fails startup.
+
+Visit `/<username>/auth/google/login` to start login. The username follows the
+existing lowercase namespace syntax; `auth` is reserved when authentication is
+enabled. The first successful Google login claims that name. Subsequent logins
+must have the same Google `sub`; matching email alone never grants ownership.
+This is first-come registration, not a pre-provisioned account directory.
+A Google account can currently bind more than one available name; there is no
+global reverse subject-to-username index.
+
+The existing username hash selects the owner shard (multiple users can share a
+shard). Login starts there. Google always redirects to the fixed callback,
+which may land on any pod. That pod verifies the Gorilla-protected state,
+recomputes the owner from its username, and forwards to the owner's configured
+DNS address. State cannot supply an arbitrary server URL. Only the owner
+consumes the login transaction, exchanges the code, checks the ID token and
+nonce, binds the username, and creates the session.
+
+Login state expires after 10 minutes, is bound to a Secure/HttpOnly browser
+cookie, and uses PKCE. Encrypted login records are stored under
+`auth/transactions/` in the owner's bucket. A conditional write marks each
+record used before code exchange, preventing concurrent replay across pod
+restarts. Configure a lifecycle rule to remove records under that prefix after
+one day, including old versions if bucket versioning is enabled. Permanent
+Google subject bindings live under `auth/users/<username>.json`; do not expire
+or reassign them.
+
+Successful login redirects to `/<username>` (also available as `/<username>/`),
+which returns the current identity and CSRF token as JSON.
+`GET /<username>/auth/session` returns the same information.
+Session cookies are signed, encrypted, Secure, HttpOnly, host-only, SameSite=Lax,
+and expire after 12 hours. Shared keys allow verification after forwarding or
+pod replacement. Changing keys invalidates existing sessions and login attempts;
+coordinate key updates across shards.
+
+With authentication enabled, namespace requests require a session and are
+currently restricted to that session's own username. The verified
+`google:<sub>` identity is passed to downstream handlers. Persisted repository
+ACLs and group access remain extension points; a session does not grant access
+to another user's private space. Unsafe methods also require
+`Origin: <GITONE_PUBLIC_URL>` and `X-CSRF-Token: <csrfToken>`.
+`POST /<username>/auth/logout` uses those protections and clears the browser
+cookie; it does not revoke a copied cookie, which remains valid until expiry.
+Liveness/readiness endpoints remain unauthenticated.
+
+This implements browser login, not Git CLI credentials or a login UI. Git/LFS
+engines still return `501`. Authentication is opt-in for existing deployments;
+with it disabled, the previous unauthenticated protocol stubs remain.
+
+Protocol references: [Google OIDC](https://developers.google.com/identity/openid-connect/openid-connect)
+and [Gorilla securecookie](https://github.com/gorilla/securecookie).
 
 ## Build And Test
 

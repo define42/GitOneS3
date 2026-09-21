@@ -25,6 +25,16 @@ service:
 
 listenAddress: 0.0.0.0
 
+auth:
+  enabled: false
+  # HTTPS origin, without a trailing slash.
+  publicURL: ""
+  googleClientID: ""
+  # Must have google-client-secret, cookie-hash-key, and cookie-block-key.
+  # Cookie keys are base64-encoded 64-byte and 32-byte random keys respectively.
+  # All shards must use the same keys.
+  existingSecret: ""
+
 s3:
   # Leave endpoint empty to use the AWS SDK endpoint for region.
   endpoint: ""

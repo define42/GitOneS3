@@ -25,10 +25,16 @@ type Resolver interface {
 	Resolve(id shard.ShardID) (*url.URL, error)
 }
 
+// Router resolves namespace requests and special routes such as OIDC callbacks.
+type Router interface {
+	Resolve(*http.Request) (shard.Route, error)
+	ShardCount() uint32
+}
+
 // HandlerOptions contains the immutable dependencies for routing middleware.
 type HandlerOptions struct {
 	LocalShard shard.ShardID
-	Router     *shard.Router
+	Router     Router
 	Resolver   Resolver
 	Next       http.Handler
 	Transport  http.RoundTripper
@@ -38,7 +44,7 @@ type HandlerOptions struct {
 // owning shard.
 type Handler struct {
 	localShard   shard.ShardID
-	router       *shard.Router
+	router       Router
 	resolver     Resolver
 	next         http.Handler
 	reverseProxy *httputil.ReverseProxy

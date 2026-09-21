@@ -5,6 +5,35 @@ one public Service, and one headless Service for direct shard forwarding. The
 StatefulSet replica count and the mounted cluster identity both come from
 `shardCount`; there is no independent replica setting.
 
+## Google OIDC
+
+Enable authentication with:
+
+```yaml
+auth:
+  enabled: true
+  publicURL: https://git.example.com
+  googleClientID: YOUR_CLIENT_ID.apps.googleusercontent.com
+  existingSecret: gitone-google-auth
+```
+
+Provision that Secret independently with these keys:
+
+- `google-client-secret`: the Google OAuth client secret.
+- `cookie-hash-key`: base64 encoding of 64 random bytes.
+- `cookie-block-key`: base64 encoding of 32 independently generated random bytes.
+
+The chart injects the same Secret into every shard. It never generates keys at
+render time. Register `https://git.example.com/auth/google/callback` with Google,
+terminate HTTPS at ingress, and allow outbound HTTPS to Google's discovery,
+token, and signing-key endpoints. Start login at
+`https://git.example.com/<username>/auth/google/login`.
+The first verified Google account to claim a username owns it permanently.
+
+Set an S3 lifecycle rule for `auth/transactions/` to expire abandoned/consumed
+login records after one day; retain `auth/users/` indefinitely. See the root
+README for session/CSRF endpoints and current authorization limitations.
+
 The chart does not create S3 credentials. The base StatefulSet shares one
 ServiceAccount across every ordinal, so `serviceAccount.annotations` alone
 cannot provide per-shard bucket IAM. For strict bucket-scoped credentials, use
