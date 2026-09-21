@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitone-cluster-identity
+  annotations:
+    "helm.sh/resource-policy": keep
+    "meta.helm.sh/release-name": {{ .Release.Name | quote }}
+    "meta.helm.sh/release-namespace": {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "gitone.labels" . | nindent 4 }}
+immutable: true
+data:
+  cluster-identity.json: |-
+    {
+      "schemaVersion": 1,
+      "shardCount": {{ .Values.shardCount }},
+      "hashAlgorithm": "xxhash64",
+      "canonicalization": "lowercase-ascii-v1",
+      "bucketPrefix": {{ .Values.s3.bucketPrefix | quote }},
+      "s3Endpoint": {{ .Values.s3.endpoint | quote }},
+      "s3Region": {{ .Values.s3.region | quote }},
+      "maxTopLevelLength": {{ .Values.path.maxTopLevelLength }},
+      "maxComponentLength": {{ .Values.path.maxComponentLength }},
+      "maxPathDepth": {{ .Values.path.maxDepth }}
+    }

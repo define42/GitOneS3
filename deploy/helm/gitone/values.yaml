@@ -1,0 +1,118 @@
+# shardCount is both the StatefulSet replica count and the permanent routing
+# modulus. Changing it after the immutable identity ConfigMap is installed is a
+# data migration, not a Helm upgrade.
+shardCount: 256
+
+image:
+  repository: gitone
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+podAnnotations: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  type: ClusterIP
+  publicPort: 8080
+  internalPort: 8081
+  internalScheme: http
+  headlessName: gitone-headless
+  annotations: {}
+
+listenAddress: 0.0.0.0
+
+s3:
+  # Leave endpoint empty to use the AWS SDK endpoint for region.
+  endpoint: ""
+  region: us-east-1
+  pathStyle: false
+  tls: true
+  bucketPrefix: gitone-shard
+
+internalAuth:
+  # This Secret is intentionally not created by the chart. It must contain the
+  # key configured by tokenKey before any shard pod is started.
+  existingSecret: gitone-internal-token
+  tokenKey: token
+  mountPath: /var/run/secrets/gitone/internal
+
+clusterIdentity:
+  mountPath: /etc/gitone/identity
+
+pack:
+  compactOnPush: true
+  maxPackCount: 32
+  maxSmallPackCount: 16
+  smallPackThreshold: 128MiB
+  liveCompaction:
+    maxInputBytes: 2GiB
+    maxInputPacks: 32
+
+path:
+  maxTopLevelLength: 63
+  maxComponentLength: 255
+  maxDepth: 32
+
+cache:
+  sizeLimit: 20Gi
+
+workspace:
+  sizeLimit: 50Gi
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    memory: 4Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: gitone
+
+nodeSelector: {}
+tolerations: []
+
+networkPolicy:
+  enabled: true
+  # Declare S3, workload-identity, metadata, and credential-broker destinations
+  # separately when they use different ports. The broad default is portable,
+  # but is not a production boundary.
+  externalEgress:
+    - cidr: 0.0.0.0/0
+      port: 443
+
+pdb:
+  # One pod is the only owner of each shard. Enabling this PDB with
+  # maxUnavailable=1 still permits one shard outage; maxUnavailable=0 blocks
+  # voluntary disruption and can impede controlled updates.
+  enabled: false
+  maxUnavailable: 1
+
+terminationGracePeriodSeconds: 120

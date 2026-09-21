@@ -1,0 +1,15 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gitone
+  labels:
+    {{- include "gitone.labels" . | nindent 4 }}
+  annotations:
+    gitone.io/single-owner-warning: "each unavailable pod makes its shard unavailable"
+spec:
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "gitone.selectorLabels" . | nindent 6 }}
+{{- end }}

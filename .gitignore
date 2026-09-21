@@ -1,0 +1,24 @@
+# Build and test artifacts.
+bin/
+dist/
+/gitone
+*.test
+*.out
+coverage.html
+
+# Dependency and local workspace state.
+vendor/
+go.work.sum
+
+# Local configuration and editor files.
+.env
+.env.*
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Ephemeral GitOne data.
+tmp/

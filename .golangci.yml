@@ -1,0 +1,35 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - asciicheck
+    - bodyclose
+    - errcheck
+    - errorlint
+    - govet
+    - gosec
+    - ineffassign
+    - misspell
+    - modernize
+    - nilerr
+    - noctx
+    - nolintlint
+    - staticcheck
+    - unused
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

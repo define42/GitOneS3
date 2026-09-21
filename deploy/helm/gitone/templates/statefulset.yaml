@@ -1,0 +1,173 @@
+{{- include "gitone.validateValues" . }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: gitone
+  labels:
+    {{- include "gitone.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ .Values.service.headlessName }}
+  replicas: {{ .Values.shardCount }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    # Every pod is the sole owner of one shard. OnDelete makes rollout batches
+    # an explicit operator decision after replacement health is verified.
+    type: OnDelete
+  selector:
+    matchLabels:
+      {{- include "gitone.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gitone.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "gitone.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "gitone.selectorLabels" . | nindent 14 }}
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "gitone.selectorLabels" . | nindent 14 }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gitone
+          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: public
+              containerPort: {{ .Values.service.publicPort }}
+              protocol: TCP
+            - name: internal
+              containerPort: {{ .Values.service.internalPort }}
+              protocol: TCP
+          env:
+            - name: TMPDIR
+              value: /var/lib/gitone/work
+            - name: GITONE_SHARD_COUNT
+              value: {{ .Values.shardCount | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: GITONE_LISTEN_ADDRESS
+              value: {{ .Values.listenAddress | quote }}
+            - name: GITONE_PUBLIC_PORT
+              value: {{ .Values.service.publicPort | quote }}
+            - name: GITONE_INTERNAL_PORT
+              value: {{ .Values.service.internalPort | quote }}
+            - name: GITONE_INTERNAL_SCHEME
+              value: {{ .Values.service.internalScheme | quote }}
+            - name: GITONE_HEADLESS_SERVICE
+              value: {{ .Values.service.headlessName | quote }}
+            - name: GITONE_S3_ENDPOINT
+              value: {{ .Values.s3.endpoint | quote }}
+            - name: GITONE_S3_REGION
+              value: {{ .Values.s3.region | quote }}
+            - name: GITONE_S3_PATH_STYLE
+              value: {{ .Values.s3.pathStyle | quote }}
+            - name: GITONE_S3_TLS
+              value: {{ .Values.s3.tls | quote }}
+            - name: GITONE_S3_BUCKET_PREFIX
+              value: {{ .Values.s3.bucketPrefix | quote }}
+            - name: GITONE_INTERNAL_TOKEN_FILE
+              value: {{ printf "%s/token" (trimSuffix "/" .Values.internalAuth.mountPath) | quote }}
+            - name: GITONE_CLUSTER_IDENTITY_FILE
+              value: {{ printf "%s/cluster-identity.json" (trimSuffix "/" .Values.clusterIdentity.mountPath) | quote }}
+            - name: GITONE_PACK_COMPACT_ON_PUSH
+              value: {{ .Values.pack.compactOnPush | quote }}
+            - name: GITONE_PACK_MAX_COUNT
+              value: {{ .Values.pack.maxPackCount | quote }}
+            - name: GITONE_PACK_MAX_SMALL_COUNT
+              value: {{ .Values.pack.maxSmallPackCount | quote }}
+            - name: GITONE_PACK_SMALL_THRESHOLD
+              value: {{ .Values.pack.smallPackThreshold | quote }}
+            - name: GITONE_PACK_LIVE_COMPACTION_MAX_INPUT_BYTES
+              value: {{ .Values.pack.liveCompaction.maxInputBytes | quote }}
+            - name: GITONE_PACK_LIVE_COMPACTION_MAX_INPUT_PACKS
+              value: {{ .Values.pack.liveCompaction.maxInputPacks | quote }}
+            - name: GITONE_PATH_MAX_TOP_LEVEL_LENGTH
+              value: {{ .Values.path.maxTopLevelLength | quote }}
+            - name: GITONE_PATH_MAX_COMPONENT_LENGTH
+              value: {{ .Values.path.maxComponentLength | quote }}
+            - name: GITONE_PATH_MAX_DEPTH
+              value: {{ .Values.path.maxDepth | quote }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: public
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: public
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: cluster-identity
+              mountPath: {{ .Values.clusterIdentity.mountPath }}
+              readOnly: true
+            - name: internal-token
+              mountPath: {{ .Values.internalAuth.mountPath }}
+              readOnly: true
+            - name: cache
+              mountPath: /var/cache/gitone
+            - name: workspace
+              mountPath: /var/lib/gitone/work
+      volumes:
+        - name: cluster-identity
+          configMap:
+            name: gitone-cluster-identity
+            items:
+              - key: cluster-identity.json
+                path: cluster-identity.json
+        - name: internal-token
+          secret:
+            secretName: {{ .Values.internalAuth.existingSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.internalAuth.tokenKey }}
+                path: token
+        - name: cache
+          emptyDir:
+            sizeLimit: {{ .Values.cache.sizeLimit }}
+        - name: workspace
+          emptyDir:
+            sizeLimit: {{ .Values.workspace.sizeLimit }}

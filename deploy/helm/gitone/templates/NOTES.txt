@@ -1,0 +1,15 @@
+GitOne installed with {{ .Values.shardCount }} immutable routing shards.
+
+Before pods start, Secret {{ .Values.internalAuth.existingSecret | quote }} must
+exist in namespace {{ .Release.Namespace | quote }} with key
+{{ .Values.internalAuth.tokenKey | quote }}.
+
+The gitone-cluster-identity ConfigMap is immutable and retained on uninstall.
+Back it up. Changing shardCount, hash/canonicalization, path limits, or the S3
+mapping requires a data migration; do not force an in-place Helm upgrade.
+
+All ordinals share one ServiceAccount in this chart. Strict per-shard bucket
+IAM requires an ordinal-aware credential injector or another workload topology.
+
+The PodDisruptionBudget is disabled by default because every pod is the only
+serving owner of one shard. Plan OnDelete rollout batches around that constraint.
