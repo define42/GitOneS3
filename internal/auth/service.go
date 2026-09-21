@@ -183,17 +183,35 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	// Repository ACL persistence is not implemented yet. Until then, private
-	// user spaces are accessible only to their bound owner.
-	if current.Username != username {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
 		if r.Header.Get("Origin") != s.origin || !equal(r.Header.Get("X-CSRF-Token"), current.CSRF) {
 			http.Error(w, "invalid CSRF token or origin", http.StatusForbidden)
 			return
 		}
+	}
+	root := r.URL.Path == "/"+username || r.URL.Path == "/"+username+"/"
+	if root && r.Method == http.MethodPost {
+		s.serveCreateGroup(w, r, username, current)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	record, _, err := s.loadNamespace(ctx, username)
+	cancel()
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+		} else {
+			serverError(w)
+		}
+		return
+	}
+	if record.Type == groupNamespace {
+		s.serveGroup(w, r, username, current, record)
+		return
+	}
+	if current.Username != username || record.Subject != current.Identity.Subject {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	}
 	if r.URL.Path == "/"+username+"/auth/logout" {
 		if r.Method != http.MethodPost {
@@ -214,14 +232,26 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Username string   `json:"username"`
 			Identity Identity `json:"identity"`
 			CSRF     string   `json:"csrfToken"`
-		}{current.Username, current.Identity, current.CSRF})
+			UserID   string   `json:"userId"`
+		}{current.Username, current.Identity, current.CSRF, userID(current.Identity)})
 		return
 	}
-	subject := authz.Subject{UserID: "google:" + current.Identity.Subject, Authenticated: true}
+	subject := authz.Subject{UserID: userID(current.Identity), Authenticated: true}
 	s.next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), subjectKey{}, subject)))
 }
 
 func (s *Service) login(w http.ResponseWriter, r *http.Request, username string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	record, _, err := s.loadNamespace(ctx, username)
+	if err == nil && record.Type != userNamespace {
+		http.Error(w, "namespace belongs to a group; log in through your user space", http.StatusConflict)
+		return
+	}
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		serverError(w)
+		return
+	}
 	id, err := randomToken()
 	if err != nil {
 		serverError(w)
@@ -254,8 +284,6 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request, username string)
 		serverError(w)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
 	_, err = s.store.Put(ctx, "auth/transactions/"+id, strings.NewReader(encodedTx), int64(len(encodedTx)), storage.PutOptions{IfNoneMatch: true})
 	if err != nil {
 		serverError(w)

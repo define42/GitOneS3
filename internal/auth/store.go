@@ -1,9 +1,7 @@
 package auth
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 
@@ -15,27 +13,18 @@ var errUsernameTaken = errors.New("username is bound to a different Google accou
 // bindUser claims a new name atomically or verifies its existing subject binding.
 // It never reassigns ownership based on email or on the requested username.
 func (s *Service) bindUser(ctx context.Context, username string, identity Identity) error {
-	key := "auth/users/" + username + ".json"
-	data, err := json.Marshal(identity)
-	if err != nil {
-		return err
-	}
-	_, err = s.store.Put(ctx, key, bytes.NewReader(data), int64(len(data)), storage.PutOptions{IfNoneMatch: true})
+	err := s.writeNamespace(ctx, username, namespaceRecord{SchemaVersion: 1, Type: userNamespace, Identity: identity}, "")
 	if err == nil {
 		return nil
 	}
-	if !errors.Is(err, storage.ErrAlreadyExists) && !errors.Is(err, storage.ErrPreconditionFailed) && !errors.Is(err, storage.ErrConditionalConflict) {
+	if !isNamespaceConflict(err) {
 		return err
 	}
-	data, _, err = s.readObject(ctx, key)
+	existing, _, err := s.loadNamespace(ctx, username)
 	if err != nil {
 		return err
 	}
-	var existing Identity
-	if err := json.Unmarshal(data, &existing); err != nil {
-		return err
-	}
-	if existing.Subject != identity.Subject {
+	if existing.Type != userNamespace || existing.Subject != identity.Subject {
 		return errUsernameTaken
 	}
 	return nil

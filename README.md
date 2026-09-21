@@ -47,6 +47,8 @@ Git/LFS client -> public Service -> any gitone-N
 - Optional Google OIDC browser authentication with owner-shard code exchange,
   signed/encrypted Gorilla cookies, durable single-use login state, and atomic
   username-to-Google-subject bindings.
+- Shared user/group namespace claims, creator ownership, accepted invitations,
+  group member roles, and conditional membership updates that preserve an owner.
 - Bounded live-compaction planning that keeps large packs intact, selects only
   fragmented small packs plus the incoming pack, and queues oversized work.
 - S3-backed readiness, structured request logs, graceful HTTP
@@ -60,7 +62,6 @@ external contracts unspecified. The owner-side dispatcher recognizes standard
 Git Smart HTTP and Git LFS routes, but currently returns `501 Not Implemented`
 until these engines are installed:
 
-- group namespace allocation and a globally consistent group registry;
 - repository path metadata and creation APIs;
 - `git-upload-pack` / `git-receive-pack`, pack validation, and ref semantics;
 - the `control.git` compiler and persisted ACL generations;
@@ -165,8 +166,8 @@ cookie, and uses PKCE. Encrypted login records are stored under
 record used before code exchange, preventing concurrent replay across pod
 restarts. Configure a lifecycle rule to remove records under that prefix after
 one day, including old versions if bucket versioning is enabled. Permanent
-Google subject bindings live under `auth/users/<username>.json`; do not expire
-or reassign them.
+User and group namespace records share `auth/users/<name>.json` for compatibility
+with existing user bindings. Do not expire, delete, or reassign those records.
 
 Successful login redirects to `/<username>` (also available as `/<username>/`),
 which returns the current identity and CSRF token as JSON.
@@ -176,11 +177,12 @@ and expire after 12 hours. Shared keys allow verification after forwarding or
 pod replacement. Changing keys invalidates existing sessions and login attempts;
 coordinate key updates across shards.
 
-With authentication enabled, namespace requests require a session and are
-currently restricted to that session's own username. The verified
-`google:<sub>` identity is passed to downstream handlers. Persisted repository
-ACLs and group access remain extension points; a session does not grant access
-to another user's private space. Unsafe methods also require
+With authentication enabled, namespace requests require a session. Personal
+spaces are restricted to their bound account; groups check current membership
+and the requested operation. The verified `google:<sub>` identity is passed to
+downstream handlers and is returned as `userId` by the session endpoint.
+Persisted per-repository ACL overrides remain an extension point; a session
+does not grant access to another user's private space. Unsafe methods require
 `Origin: <GITONE_PUBLIC_URL>` and `X-CSRF-Token: <csrfToken>`.
 `POST /<username>/auth/logout` uses those protections and clears the browser
 cookie; it does not revoke a copied cookie, which remains valid until expiry.
@@ -192,6 +194,60 @@ with it disabled, the previous unauthenticated protocol stubs remain.
 
 Protocol references: [Google OIDC](https://developers.google.com/identity/openid-connect/openid-connect)
 and [Gorilla securecookie](https://github.com/gorilla/securecookie).
+
+## Shared Groups
+
+An authenticated user creates a group with `POST /<group>` (or `/<group>/`).
+No request body is required: the name comes from the URL, and the creator's
+immutable user ID comes from their signed session. Send the session cookie,
+`Origin`, and `X-CSRF-Token` as described above. A successful request returns
+`201 Created`, the group record, and `Location: /<group>/`.
+
+Users and groups share the same name space and naming/reserved-name rules.
+The group name selects its owning shard using the existing hash, independently
+of the creator's personal shard. A conditional S3 create makes concurrent user
+registration and group creation mutually exclusive; taken names return `409`.
+The common record retains the existing `auth/users/<name>.json` key so legacy
+user bindings remain protected without a migration or a second claim index.
+
+Groups have three roles, inherited by repositories below that group:
+
+| Role | Access |
+| --- | --- |
+| `reader` | View the group, Git fetch, and LFS downloads |
+| `developer` | Reader access plus Git push and LFS uploads/mutations |
+| `owner` | Developer access plus invitations and membership management |
+
+Git/LFS protocol engines still return `501` after these permission checks.
+Group roles apply across the whole namespace; per-repository overrides are
+not implemented yet. Membership is read from S3 on each request rather than
+embedded in the session, so revocations take effect on subsequent requests.
+
+| Endpoint | Caller / purpose |
+| --- | --- |
+| `GET /<group>/` | Member: view group, roster, own role and CSRF token |
+| `GET /<group>/members` | Owner: inspect membership |
+| `GET /<group>/invitations` | Owner: inspect pending invitations |
+| `POST /<group>/invitations` | Owner: invite or update an invitation with `{"userId":"google:SUB","role":"reader"}` |
+| `POST /<group>/invitations/accept` | Invited user: accept using their own session; no body |
+| `DELETE /<group>/invitations` | Owner: cancel with `{"userId":"google:SUB"}` |
+| `PUT /<group>/members` | Owner: change an accepted member's role with `{"userId":"google:SUB","role":"developer"}` |
+| `DELETE /<group>/members` | Owner: remove a member with `{"userId":"google:SUB"}` |
+
+JSON bodies require `Content-Type: application/json`; all mutations require the
+same session/Origin/CSRF checks. Members share their `userId` from their personal
+`/<username>/auth/session` endpoint. Invitations target that immutable ID,
+not an email or mutable display name, and grant access only after acceptance.
+The owner shares the group URL with the invitee; there is no email delivery or
+invitation UI. Pending invitations remain until accepted or canceled.
+
+The creator starts as owner and may promote another accepted member to owner.
+Removing or demoting the last owner returns `409`, including under concurrent
+updates. Conditional-write conflicts are retried against current permissions;
+persistent contention returns `409` so clients can retry. Groups are limited
+to 1,000 members, 1,000 pending invitations, and a 128 KiB namespace record.
+Renaming and deleting groups are not supported, and group names cannot be used
+for Google login: members log in through their personal space.
 
 ## Build And Test
 

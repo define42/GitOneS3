@@ -31,8 +31,10 @@ token, and signing-key endpoints. Start login at
 The first verified Google account to claim a username owns it permanently.
 
 Set an S3 lifecycle rule for `auth/transactions/` to expire abandoned/consumed
-login records after one day; retain `auth/users/` indefinitely. See the root
-README for session/CSRF endpoints and current authorization limitations.
+login records after one day; retain `auth/users/` indefinitely, as it now holds
+the common user/group namespace claims and group membership records. Existing
+user records are read without migration. See the root README for session/CSRF,
+group creation and sharing APIs, and current authorization limitations.
 
 The chart does not create S3 credentials. The base StatefulSet shares one
 ServiceAccount across every ordinal, so `serviceAccount.annotations` alone
