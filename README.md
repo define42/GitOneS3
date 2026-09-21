@@ -30,8 +30,8 @@ Git/LFS client -> public Service -> any gitone-N
   keys, traversal, malformed escaping, encoded separators, and reserved names.
 - Streaming `httputil.ReverseProxy` forwarding to stable StatefulSet DNS with
   context cancellation and no request/response body buffering.
-- Separate public and internal listeners, constant-time internal token checks,
-  spoofed-header stripping, and one-hop routing mismatch rejection.
+- Separate public and internal listeners, internal-header stripping, and
+  one-hop routing mismatch rejection.
 - Immutable cluster identity validation for routing, path policy, and the
   per-shard S3 bucket mapping.
 - Fixed-bucket AWS SDK v2 adapter for S3-compatible storage with conditional
@@ -76,7 +76,7 @@ cmd/gitone/                 process entry point
 internal/app/               dependency wiring
 internal/config/            environment and immutable cluster identity
 internal/shard/             canonical paths, XXH64, owner calculation
-internal/proxy/             one-hop authenticated streaming forwarding
+internal/proxy/             one-hop streaming forwarding
 internal/storage/           object and repository CAS contracts
 internal/storage/s3store/   fixed-bucket AWS S3 adapter
 internal/authz/             inherited shard-local authorization
@@ -101,7 +101,6 @@ from the mounted cluster identity.
 | `GITONE_INTERNAL_PORT` | `8081` | Pod-to-pod listener |
 | `GITONE_INTERNAL_SCHEME` | `http` | Application-layer pod URL scheme; transport mTLS is transparent |
 | `GITONE_HEADLESS_SERVICE` | `gitone-headless` | StatefulSet DNS Service |
-| `GITONE_INTERNAL_TOKEN_FILE` | `/var/run/secrets/gitone/internal/token` | Internal token mount |
 | `GITONE_CLUSTER_IDENTITY_FILE` | `/etc/gitone/identity/cluster-identity.json` | Immutable identity mount |
 | `GITONE_S3_ENDPOINT` | AWS regional endpoint | S3-compatible endpoint |
 | `GITONE_S3_REGION` | `us-east-1` | AWS region |
@@ -117,9 +116,9 @@ from the mounted cluster identity.
 | `GITONE_PACK_LIVE_COMPACTION_MAX_INPUT_BYTES` | `2GiB` | Synchronous compaction byte bound |
 | `GITONE_PACK_LIVE_COMPACTION_MAX_INPUT_PACKS` | `32` | Synchronous compaction pack bound |
 
-AWS credentials use the SDK's normal provider chain. The buckets and internal
-token Secret must exist before pods start. Each process checks that its bucket
-honors `If-Match` and `If-None-Match` writes before it starts serving; failed
+AWS credentials use the SDK's normal provider chain. The buckets must exist
+before pods start. Each process checks that its bucket honors `If-Match` and
+`If-None-Match` writes before it starts serving; failed
 probes keep the shard unavailable. Production qualification must also run
 concurrent CAS acceptance tests against the exact provider/version. Configure a
 lifecycle rule for abandoned objects and old versions below
@@ -149,10 +148,9 @@ helm install gitone deploy/helm/gitone \
   --set s3.bucketPrefix=globally-unique-gitone-prod-shard
 ```
 
-Create the Secret named by `internalAuth.existingSecret` first. Its token must
-be at least 32 visible ASCII bytes. Enable transparent service-mesh mTLS or an
-equivalent authenticated transport and narrow the chart's portable external
-egress default.
+Shard forwarding requires no shared token or caller authentication. Requests
+are forwarded directly to their owner with a one-hop marker. Transport mTLS
+can be provided independently by a service mesh.
 
 The base chart uses one ServiceAccount for the StatefulSet. Application code is
 fixed to the ordinal-derived bucket, but a shared ServiceAccount is not

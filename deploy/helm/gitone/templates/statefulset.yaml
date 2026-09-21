@@ -102,8 +102,6 @@ spec:
               value: {{ .Values.s3.tls | quote }}
             - name: GITONE_S3_BUCKET_PREFIX
               value: {{ .Values.s3.bucketPrefix | quote }}
-            - name: GITONE_INTERNAL_TOKEN_FILE
-              value: {{ printf "%s/token" (trimSuffix "/" .Values.internalAuth.mountPath) | quote }}
             - name: GITONE_CLUSTER_IDENTITY_FILE
               value: {{ printf "%s/cluster-identity.json" (trimSuffix "/" .Values.clusterIdentity.mountPath) | quote }}
             - name: GITONE_PACK_COMPACT_ON_PUSH
@@ -144,9 +142,6 @@ spec:
             - name: cluster-identity
               mountPath: {{ .Values.clusterIdentity.mountPath }}
               readOnly: true
-            - name: internal-token
-              mountPath: {{ .Values.internalAuth.mountPath }}
-              readOnly: true
             - name: cache
               mountPath: /var/cache/gitone
             - name: workspace
@@ -158,13 +153,6 @@ spec:
             items:
               - key: cluster-identity.json
                 path: cluster-identity.json
-        - name: internal-token
-          secret:
-            secretName: {{ .Values.internalAuth.existingSecret }}
-            defaultMode: 0440
-            items:
-              - key: {{ .Values.internalAuth.tokenKey }}
-                path: token
         - name: cache
           emptyDir:
             sizeLimit: {{ .Values.cache.sizeLimit }}

@@ -22,7 +22,6 @@ func TestLoadDefaults(t *testing.T) {
 		InternalScheme:      DefaultInternalScheme,
 		HeadlessService:     DefaultHeadlessService,
 		Namespace:           "gitone-system",
-		InternalTokenFile:   DefaultInternalTokenFile,
 		ClusterIdentityFile: DefaultClusterIdentityFile,
 		S3: S3{
 			Region:       DefaultS3Region,
@@ -60,7 +59,6 @@ func TestLoadOverrides(t *testing.T) {
 	environment["GITONE_PUBLIC_PORT"] = "9000"
 	environment["GITONE_INTERNAL_PORT"] = "9001"
 	environment["GITONE_HEADLESS_SERVICE"] = "shards"
-	environment["GITONE_INTERNAL_TOKEN_FILE"] = "/run/gitone/token"
 	environment["GITONE_CLUSTER_IDENTITY_FILE"] = "/run/gitone/identity.json"
 	environment["GITONE_S3_ENDPOINT"] = "http://minio.storage.svc:9000"
 	environment["GITONE_S3_REGION"] = "eu-north-1"
@@ -123,7 +121,6 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 		{name: "invalid internal scheme", key: "GITONE_INTERNAL_SCHEME", value: "tcp", errorMatch: "must be http"},
 		{name: "invalid path style", key: "GITONE_S3_PATH_STYLE", value: "sometimes", errorMatch: "must be a boolean"},
 		{name: "uppercase bucket prefix", key: "GITONE_S3_BUCKET_PREFIX", value: "GitOne", errorMatch: "dns-safe"},
-		{name: "relative token path", key: "GITONE_INTERNAL_TOKEN_FILE", value: "token", errorMatch: "absolute path"},
 		{name: "relative identity path", key: "GITONE_CLUSTER_IDENTITY_FILE", value: "identity.json", errorMatch: "absolute path"},
 		{name: "bad endpoint", key: "GITONE_S3_ENDPOINT", value: "minio:9000", errorMatch: "absolute http or https"},
 		{name: "endpoint path", key: "GITONE_S3_ENDPOINT", value: "https://s3.example/base", errorMatch: "cannot contain a path"},

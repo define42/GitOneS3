@@ -27,7 +27,7 @@ type Checker interface {
 	Check(context.Context) error
 }
 
-// Servers runs separate public and authenticated-internal listeners.
+// Servers runs separate public and internal listeners.
 type Servers struct {
 	public   *http.Server
 	internal *http.Server

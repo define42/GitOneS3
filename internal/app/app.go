@@ -5,13 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -25,8 +22,6 @@ import (
 	"github.com/define42/GitOneS3/internal/storage/s3store"
 )
 
-const maxInternalTokenFileSize = 16 << 10
-
 // App owns the two HTTP listeners and forwarding transport for one shard.
 type App struct {
 	servers          *httpserver.Servers
@@ -34,7 +29,7 @@ type App struct {
 }
 
 // New validates immutable cluster identity, creates the fixed-bucket S3
-// adapter, and wires public and authenticated-internal routing.
+// adapter, and wires public and internal routing.
 func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -49,10 +44,6 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	}
 	if err := cfg.ValidateClusterIdentity(identity); err != nil {
 		return nil, fmt.Errorf("validate immutable cluster identity: %w", err)
-	}
-	internalToken, err := readInternalToken(cfg.InternalTokenFile)
-	if err != nil {
-		return nil, err
 	}
 
 	awsConfig, err := awsconfig.LoadDefaultConfig(
@@ -100,19 +91,14 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	}
 	ownerHandler := protocol.NewHandler(nil, nil)
 	routingHandler, err := proxy.NewHandler(proxy.HandlerOptions{
-		LocalShard:    shard.ShardID(cfg.LocalShard),
-		Router:        router,
-		Resolver:      destinationResolver,
-		Next:          ownerHandler,
-		InternalToken: internalToken,
-		Transport:     forwardTransport,
+		LocalShard: shard.ShardID(cfg.LocalShard),
+		Router:     router,
+		Resolver:   destinationResolver,
+		Next:       ownerHandler,
+		Transport:  forwardTransport,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create routing handler: %w", err)
-	}
-	internalHandler, err := proxy.NewInternalAuth(routingHandler, internalToken)
-	if err != nil {
-		return nil, fmt.Errorf("create internal authentication handler: %w", err)
 	}
 
 	shardLogger := logger.With("shard_id", cfg.LocalShard)
@@ -121,7 +107,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		objectStore,
 	)
 	privateHandler := httpserver.WithHealth(
-		httpserver.LogRequests(internalHandler, shardLogger),
+		httpserver.LogRequests(routingHandler, shardLogger),
 		objectStore,
 	)
 	servers, err := httpserver.New(
@@ -142,36 +128,6 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 func (a *App) Run(ctx context.Context) error {
 	defer a.forwardTransport.CloseIdleConnections()
 	return a.servers.Run(ctx)
-}
-
-func readInternalToken(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("open internal token: %w", err)
-	}
-	data, readErr := io.ReadAll(io.LimitReader(file, maxInternalTokenFileSize+1))
-	closeErr := file.Close()
-	if err := errors.Join(readErr, closeErr); err != nil {
-		return "", fmt.Errorf("read internal token: %w", err)
-	}
-	if len(data) > maxInternalTokenFileSize {
-		return "", errors.New("internal token file is too large")
-	}
-
-	token := strings.TrimRight(string(data), "\r\n")
-	if len(token) < proxy.MinimumInternalTokenSize {
-		return "", fmt.Errorf(
-			"internal token must contain at least %d bytes",
-			proxy.MinimumInternalTokenSize,
-		)
-	}
-	for index := 0; index < len(token); index++ {
-		if token[index] < 0x21 || token[index] > 0x7e {
-			return "", errors.New("internal token must contain only visible ASCII bytes")
-		}
-	}
-
-	return token, nil
 }
 
 func listenAddress(host string, port uint16) string {
@@ -196,7 +152,7 @@ func newForwardTransport(shardCount uint32) (*http.Transport, error) {
 		return nil, errors.New("default HTTP transport has an unsupported type")
 	}
 	transport := defaultTransport.Clone()
-	// Internal credentials must never leave the cluster through HTTP_PROXY.
+	// Forward directly to shard pods without using HTTP_PROXY.
 	transport.Proxy = nil
 	connectionTarget := min(uint64(shardCount)*4, 65536)
 	transport.MaxIdleConns = max(1024, int(connectionTarget))

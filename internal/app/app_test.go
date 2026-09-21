@@ -2,9 +2,6 @@ package app
 
 import (
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -12,69 +9,6 @@ import (
 
 	"github.com/define42/GitOneS3/internal/config"
 )
-
-func TestReadInternalToken(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		contents  string
-		want      string
-		wantError bool
-	}{
-		{
-			name:     "trailing secret newline",
-			contents: strings.Repeat("a", 32) + "\n",
-			want:     strings.Repeat("a", 32),
-		},
-		{
-			name:      "too short",
-			contents:  "short",
-			wantError: true,
-		},
-		{
-			name:      "embedded whitespace",
-			contents:  strings.Repeat("a", 32) + " b",
-			wantError: true,
-		},
-		{
-			name:      "embedded nul",
-			contents:  strings.Repeat("a", 32) + "\x00b",
-			wantError: true,
-		},
-		{
-			name:      "delete byte",
-			contents:  strings.Repeat("a", 32) + "\x7f",
-			wantError: true,
-		},
-		{
-			name:      "non ascii",
-			contents:  strings.Repeat("a", 32) + "é",
-			wantError: true,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			path := filepath.Join(t.TempDir(), "token")
-			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
-				t.Fatalf("WriteFile() error = %v", err)
-			}
-			got, err := readInternalToken(path)
-			if test.wantError && err == nil {
-				t.Fatal("readInternalToken() error = nil, want error")
-			}
-			if !test.wantError && err != nil {
-				t.Fatalf("readInternalToken() error = %v", err)
-			}
-			if got != test.want {
-				t.Fatalf("readInternalToken() = %q, want %q", got, test.want)
-			}
-		})
-	}
-}
 
 func TestListenAddress(t *testing.T) {
 	t.Parallel()

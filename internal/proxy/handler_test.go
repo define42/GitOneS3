@@ -16,8 +16,6 @@ import (
 	"github.com/define42/GitOneS3/internal/shard"
 )
 
-const testInternalToken = "0123456789abcdef0123456789abcdef"
-
 func TestNewHandlerValidatesOptions(t *testing.T) {
 	t.Parallel()
 
@@ -27,11 +25,10 @@ func TestNewHandlerValidatesOptions(t *testing.T) {
 	})
 	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 	valid := HandlerOptions{
-		LocalShard:    0,
-		Router:        router,
-		Resolver:      resolver,
-		Next:          next,
-		InternalToken: testInternalToken,
+		LocalShard: 0,
+		Router:     router,
+		Resolver:   resolver,
+		Next:       next,
 	}
 
 	tests := []struct {
@@ -42,8 +39,6 @@ func TestNewHandlerValidatesOptions(t *testing.T) {
 		{name: "missing resolver", mutate: func(o *HandlerOptions) { o.Resolver = nil }},
 		{name: "missing next", mutate: func(o *HandlerOptions) { o.Next = nil }},
 		{name: "local shard out of range", mutate: func(o *HandlerOptions) { o.LocalShard = 2 }},
-		{name: "short token", mutate: func(o *HandlerOptions) { o.InternalToken = "short" }},
-		{name: "control byte in token", mutate: func(o *HandlerOptions) { o.InternalToken = testInternalToken + "\n" }},
 	}
 
 	for _, test := range tests {
@@ -77,7 +72,6 @@ func TestHandlerServesOwnerLocallyAndStripsUntrustedHeaders(t *testing.T) {
 	request.Header.Set("X-User", "attacker")
 	request.Header.Set("X-GitOne-Role", "owner")
 	request.Header.Set(ForwardedHeader, ForwardedHeaderValue)
-	request.Header.Set(InternalTokenHeader, "wrong-token")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -123,8 +117,6 @@ func TestHandlerForwardsDirectlyAndReplacesSpoofedHeaders(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer original")
 	request.Header.Set("X-User", "attacker")
 	request.Header.Set("X-GitOne-Role", "owner")
-	request.Header.Set(ForwardedHeader, ForwardedHeaderValue)
-	request.Header.Set(InternalTokenHeader, "spoofed")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -156,9 +148,6 @@ func TestHandlerForwardsDirectlyAndReplacesSpoofedHeaders(t *testing.T) {
 	if outbound.Header.Get(ForwardedHeader) != ForwardedHeaderValue {
 		t.Errorf("forward marker = %q, expected %q", outbound.Header.Get(ForwardedHeader), ForwardedHeaderValue)
 	}
-	if outbound.Header.Get(InternalTokenHeader) != testInternalToken {
-		t.Error("proxy did not replace spoofed token with its configured token")
-	}
 	if outbound.Header.Get("X-User") != "" || outbound.Header.Get("X-GitOne-Role") != "" {
 		t.Error("spoofed identity header reached owner")
 	}
@@ -167,7 +156,38 @@ func TestHandlerForwardsDirectlyAndReplacesSpoofedHeaders(t *testing.T) {
 	}
 }
 
-func TestHandlerAcceptsAuthenticatedForwardOnlyAtOwner(t *testing.T) {
+func TestHandlerForwardsToOwnerWithoutCredentials(t *testing.T) {
+	t.Parallel()
+
+	var ownerCalled bool
+	owner := proxyTestHandler(t, 1, nil, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		ownerCalled = true
+		assertInternalHeadersAbsent(t, request.Header)
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Header.Get("Authorization") != "" || request.Header.Get("X-GitOne-Internal-Token") != "" {
+			t.Error("forwarded request unexpectedly contains credentials")
+		}
+		if request.Header.Get(ForwardedHeader) != ForwardedHeaderValue {
+			t.Error("forwarded request is missing its one-hop marker")
+		}
+		response := httptest.NewRecorder()
+		owner.ServeHTTP(response, request)
+		return response.Result(), nil
+	})
+	entry := proxyTestHandler(t, 0, transport, http.NotFoundHandler())
+	request := httptest.NewRequest(http.MethodGet, "/alice/repo.git/info/refs?service=git-upload-pack", nil)
+	response := httptest.NewRecorder()
+
+	entry.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent || !ownerCalled {
+		t.Fatalf("status = %d, owner called = %t; want 204 and true", response.Code, ownerCalled)
+	}
+}
+
+func TestHandlerAcceptsForwardedRequestOnlyAtOwner(t *testing.T) {
 	t.Parallel()
 
 	t.Run("owner serves locally", func(t *testing.T) {
@@ -179,11 +199,11 @@ func TestHandlerAcceptsAuthenticatedForwardOnlyAtOwner(t *testing.T) {
 		})
 		handler := proxyTestHandler(t, 0, nil, next)
 		request := httptest.NewRequest(http.MethodGet, "/acme/repo.git/info/refs", nil)
-		setAuthenticatedForward(request)
+		setForwardedRequest(request)
 
 		handler.ServeHTTP(httptest.NewRecorder(), request)
 		if !nextCalled {
-			t.Fatal("owner did not serve authenticated forwarded request")
+			t.Fatal("owner did not serve forwarded request")
 		}
 	})
 
@@ -197,15 +217,14 @@ func TestHandlerAcceptsAuthenticatedForwardOnlyAtOwner(t *testing.T) {
 		handler := newProxyTestHandler(
 			t,
 			HandlerOptions{
-				LocalShard:    0,
-				Router:        proxyTestRouter(t, 2),
-				Resolver:      resolver,
-				Next:          http.NotFoundHandler(),
-				InternalToken: testInternalToken,
+				LocalShard: 0,
+				Router:     proxyTestRouter(t, 2),
+				Resolver:   resolver,
+				Next:       http.NotFoundHandler(),
 			},
 		)
 		request := httptest.NewRequest(http.MethodGet, "/alice/repo.git/info/refs", nil)
-		setAuthenticatedForward(request)
+		setForwardedRequest(request)
 		response := httptest.NewRecorder()
 
 		handler.ServeHTTP(response, request)
@@ -213,7 +232,7 @@ func TestHandlerAcceptsAuthenticatedForwardOnlyAtOwner(t *testing.T) {
 			t.Fatalf("status = %d, expected routing mismatch", response.Code)
 		}
 		if resolved {
-			t.Fatal("authenticated forwarded request was forwarded a second time")
+			t.Fatal("forwarded request was forwarded a second time")
 		}
 	})
 }
@@ -246,11 +265,10 @@ func TestHandlerReportsResolutionAndTransportFailures(t *testing.T) {
 			return nil, errors.New("dns configuration failed")
 		})
 		handler := newProxyTestHandler(t, HandlerOptions{
-			LocalShard:    0,
-			Router:        proxyTestRouter(t, 2),
-			Resolver:      resolver,
-			Next:          http.NotFoundHandler(),
-			InternalToken: testInternalToken,
+			LocalShard: 0,
+			Router:     proxyTestRouter(t, 2),
+			Resolver:   resolver,
+			Next:       http.NotFoundHandler(),
 		})
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(
@@ -442,12 +460,11 @@ func proxyTestHandler(
 		t.Fatalf("NewStatefulSetResolver() error = %v", err)
 	}
 	return newProxyTestHandler(t, HandlerOptions{
-		LocalShard:    localShard,
-		Router:        proxyTestRouter(t, 2),
-		Resolver:      resolver,
-		Next:          next,
-		InternalToken: testInternalToken,
-		Transport:     transport,
+		LocalShard: localShard,
+		Router:     proxyTestRouter(t, 2),
+		Resolver:   resolver,
+		Next:       next,
+		Transport:  transport,
 	})
 }
 
@@ -473,9 +490,8 @@ func proxyTestRouter(t *testing.T, shardCount uint32) *shard.Router {
 	return router
 }
 
-func setAuthenticatedForward(request *http.Request) {
+func setForwardedRequest(request *http.Request) {
 	request.Header.Set(ForwardedHeader, ForwardedHeaderValue)
-	request.Header.Set(InternalTokenHeader, testInternalToken)
 }
 
 func assertInternalHeadersAbsent(t *testing.T, header http.Header) {

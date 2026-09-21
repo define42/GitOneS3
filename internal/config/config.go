@@ -20,7 +20,6 @@ const (
 	DefaultHeadlessService     = "gitone-headless"
 	DefaultS3Region            = "us-east-1"
 	DefaultS3BucketPrefix      = "gitone-shard"
-	DefaultInternalTokenFile   = "/var/run/secrets/gitone/internal/token"
 	DefaultClusterIdentityFile = "/etc/gitone/identity/cluster-identity.json"
 	DefaultMaxTopLevelLength   = 63
 	DefaultMaxComponentLength  = 255
@@ -53,7 +52,6 @@ type Config struct {
 	InternalScheme      string
 	HeadlessService     string
 	Namespace           string
-	InternalTokenFile   string
 	ClusterIdentityFile string
 	S3                  S3
 	Pack                PackPolicy
@@ -195,7 +193,6 @@ func Load(lookup LookupEnv) (Config, error) {
 		InternalScheme:      value(lookup, "GITONE_INTERNAL_SCHEME", DefaultInternalScheme),
 		HeadlessService:     value(lookup, "GITONE_HEADLESS_SERVICE", DefaultHeadlessService),
 		Namespace:           requiredValue(lookup, "POD_NAMESPACE"),
-		InternalTokenFile:   value(lookup, "GITONE_INTERNAL_TOKEN_FILE", DefaultInternalTokenFile),
 		ClusterIdentityFile: value(lookup, "GITONE_CLUSTER_IDENTITY_FILE", DefaultClusterIdentityFile),
 		S3: S3{
 			Endpoint:     value(lookup, "GITONE_S3_ENDPOINT", ""),
@@ -262,9 +259,6 @@ func (c Config) Validate() error {
 	}
 	if err := validateDNSLabel("pod namespace", c.Namespace); err != nil {
 		return err
-	}
-	if !filepath.IsAbs(c.InternalTokenFile) {
-		return fmt.Errorf("config: internal token file must be an absolute path")
 	}
 	if !filepath.IsAbs(c.ClusterIdentityFile) {
 		return fmt.Errorf("config: cluster identity file must be an absolute path")

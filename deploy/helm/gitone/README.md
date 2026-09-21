@@ -5,15 +5,6 @@ one public Service, and one headless Service for direct shard forwarding. The
 StatefulSet replica count and the mounted cluster identity both come from
 `shardCount`; there is no independent replica setting.
 
-Create the internal-forwarding Secret before installing the chart:
-
-```sh
-kubectl -n gitone create secret generic gitone-internal-token \
-  --from-literal=token='<random shared token>'
-```
-
-The token must contain at least 32 visible ASCII bytes.
-
 The chart does not create S3 credentials. The base StatefulSet shares one
 ServiceAccount across every ordinal, so `serviceAccount.annotations` alone
 cannot provide per-shard bucket IAM. For strict bucket-scoped credentials, use
@@ -24,9 +15,13 @@ destination and port used by the installation.
 Choose a globally unique `s3.bucketPrefix`; the default is suitable only as a
 development/example value.
 
-Internal forwarding uses application-layer `http`. The mounted shared token
-authenticates the base deployment; production environments should layer
-transparent workload-identity-backed mTLS onto that listener.
+Internal forwarding uses application-layer `http` without a shared token or
+caller authentication. A forwarding marker prevents repeated hops. Transparent
+service-mesh mTLS can be configured independently if desired.
+
+When upgrading from a token-based release, remove `internalAuth` from custom
+values files. Coordinate the shard update: older pods still require a token
+and will reject forwards from updated pods.
 
 `gitone-cluster-identity` is an immutable, Helm-retained ConfigMap. It pins the
 shard/hash/canonicalization tuple, path limits, and S3 bucket mapping. Back it

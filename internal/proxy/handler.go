@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,10 +12,8 @@ import (
 )
 
 const (
-	ForwardedHeader          = "X-GitOne-Forwarded"
-	InternalTokenHeader      = "X-GitOne-Internal-Token"
-	ForwardedHeaderValue     = "1"
-	MinimumInternalTokenSize = 32
+	ForwardedHeader      = "X-GitOne-Forwarded"
+	ForwardedHeaderValue = "1"
 )
 
 var (
@@ -30,23 +27,21 @@ type Resolver interface {
 
 // HandlerOptions contains the immutable dependencies for routing middleware.
 type HandlerOptions struct {
-	LocalShard    shard.ShardID
-	Router        *shard.Router
-	Resolver      Resolver
-	Next          http.Handler
-	InternalToken string
-	Transport     http.RoundTripper
+	LocalShard shard.ShardID
+	Router     *shard.Router
+	Resolver   Resolver
+	Next       http.Handler
+	Transport  http.RoundTripper
 }
 
 // Handler serves local requests and directly streams remote requests to their
 // owning shard.
 type Handler struct {
-	localShard    shard.ShardID
-	router        *shard.Router
-	resolver      Resolver
-	next          http.Handler
-	internalToken []byte
-	reverseProxy  *httputil.ReverseProxy
+	localShard   shard.ShardID
+	router       *shard.Router
+	resolver     Resolver
+	next         http.Handler
+	reverseProxy *httputil.ReverseProxy
 }
 
 // NewHandler validates dependencies and constructs shard-routing middleware.
@@ -62,13 +57,6 @@ func NewHandler(options HandlerOptions) (*Handler, error) {
 	}
 	if uint32(options.LocalShard) >= options.Router.ShardCount() {
 		return nil, fmt.Errorf("%w: local shard is out of range", ErrInvalidHandlerConfig)
-	}
-	if !validInternalToken(options.InternalToken) {
-		return nil, fmt.Errorf(
-			"%w: internal token must contain at least %d visible ASCII bytes",
-			ErrInvalidHandlerConfig,
-			MinimumInternalTokenSize,
-		)
 	}
 
 	transport := options.Transport
@@ -88,12 +76,11 @@ func NewHandler(options HandlerOptions) (*Handler, error) {
 	}
 
 	return &Handler{
-		localShard:    options.LocalShard,
-		router:        options.Router,
-		resolver:      options.Resolver,
-		next:          options.Next,
-		internalToken: []byte(options.InternalToken),
-		reverseProxy:  reverseProxy,
+		localShard:   options.LocalShard,
+		router:       options.Router,
+		resolver:     options.Resolver,
+		next:         options.Next,
+		reverseProxy: reverseProxy,
 	}, nil
 }
 
@@ -105,7 +92,7 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	isForwarded := h.isAuthenticatedForward(request)
+	isForwarded := hasForwardedMarker(request.Header)
 	if isForwarded && route.Owner != h.localShard {
 		http.Error(response, "internal routing mismatch", http.StatusBadGateway)
 		return
@@ -142,28 +129,18 @@ func (h *Handler) serveRemote(
 		proxyRequest.SetXForwarded()
 		stripInternalHeaders(proxyRequest.Out.Header)
 		proxyRequest.Out.Header.Set(ForwardedHeader, ForwardedHeaderValue)
-		proxyRequest.Out.Header.Set(InternalTokenHeader, string(h.internalToken))
 	}
 	reverseProxy.ServeHTTP(response, request)
 }
 
-func (h *Handler) isAuthenticatedForward(request *http.Request) bool {
-	return hasAuthenticatedForward(request.Header, h.internalToken)
-}
-
-func hasAuthenticatedForward(header http.Header, internalToken []byte) bool {
-	forwardedValues := exactHeaderValues(header, ForwardedHeader)
-	tokenValues := exactHeaderValues(header, InternalTokenHeader)
-	if len(forwardedValues) != 1 || len(tokenValues) != 1 {
-		return false
+// hasForwardedMarker identifies a previous hop, not an authenticated caller.
+func hasForwardedMarker(header http.Header) bool {
+	for _, value := range exactHeaderValues(header, ForwardedHeader) {
+		if value == ForwardedHeaderValue {
+			return true
+		}
 	}
-	if forwardedValues[0] != ForwardedHeaderValue {
-		return false
-	}
-	return subtle.ConstantTimeCompare(
-		[]byte(tokenValues[0]),
-		internalToken,
-	) == 1
+	return false
 }
 
 func isValidDestination(destination *url.URL) bool {

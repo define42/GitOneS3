@@ -34,13 +34,6 @@ s3:
   tls: true
   bucketPrefix: gitone-shard
 
-internalAuth:
-  # This Secret is intentionally not created by the chart. It must contain the
-  # key configured by tokenKey before any shard pod is started.
-  existingSecret: gitone-internal-token
-  tokenKey: token
-  mountPath: /var/run/secrets/gitone/internal
-
 clusterIdentity:
   mountPath: /etc/gitone/identity
 
