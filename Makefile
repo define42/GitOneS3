@@ -1,15 +1,29 @@
 BINARY_NAME := gitone
 GO := go
+NPM := npm
 VERSION ?= $(shell git describe --tags --always --dirty)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 COMPOSE := docker compose
 
-.PHONY: all build clean test test-short lint lint-fix fmt audit run run-local stop logs smoke
+.PHONY: all build ui ui-check test-ui clean test test-short lint lint-fix fmt audit run run-local stop logs smoke
 
 all: lint test build
 
-build:
+build: ui
 	$(GO) build $(LDFLAGS) -o bin/$(BINARY_NAME) ./cmd/gitone
+
+ui:
+	$(NPM) --prefix web ci
+	$(NPM) --prefix web run build
+	rm -rf -- internal/webui/dist/assets
+	cp -R web/dist/. internal/webui/dist/
+
+ui-check:
+	$(NPM) --prefix web ci
+	$(NPM) --prefix web run build
+
+test-ui:
+	$(NPM) --prefix web run test:e2e
 
 clean:
 	rm -rf bin coverage.out coverage.html
@@ -48,5 +62,5 @@ logs:
 smoke:
 	$(COMPOSE) run --build --rm --no-deps smoke
 
-run-local:
+run-local: ui
 	$(GO) run ./cmd/gitone

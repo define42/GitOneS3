@@ -49,6 +49,8 @@ Git/LFS client -> public Service -> any gitone-N
   permanent username-to-provider-identity bindings.
 - Shared user/group namespace claims, creator ownership, accepted invitations,
   group member roles, and conditional membership updates that preserve an owner.
+- Huma-backed, typed JSON APIs with generated OpenAPI and a GitHub-inspired
+  React/TypeScript interface for registration, login, logout, and shared groups.
 - Bounded live-compaction planning that keeps large packs intact, selects only
   fragmented small packs plus the incoming pack, and queues oversized work.
 - S3-backed readiness, structured request logs, graceful HTTP
@@ -88,6 +90,8 @@ internal/authz/             inherited shard-local authorization
 internal/protocol/          Smart HTTP and LFS owner-side dispatch
 internal/maintenance/       bounded compaction planning
 internal/httpserver/        health, logging, and graceful lifecycle
+internal/webui/             embedded UI assets and narrow browser routing
+web/                       React/TypeScript application and Playwright tests
 deploy/helm/gitone/         StatefulSet, Services, policy, identity
 ```
 
@@ -146,6 +150,19 @@ Use `make stop` to stop the stack without deleting data, `make logs` for logs,
 and `make smoke` to exercise real login and shared group access.
 The former single-process command is available as `make run-local`.
 
+Open <https://gitone.localhost:8443> for the browser interface. Choose an available
+GitOne username during registration, then authenticate with the configured OIDC
+provider. Registration creates the permanent username binding; later sign-ins
+use that same username and provider account. Shared groups have their own
+available namespace and start with their creator as owner. Owners invite other
+registered users by username, select their role, and manage accepted members.
+Invitations grant access only after acceptance.
+
+See [the browser interface and API guide](docs/browser-ui.md) for routes,
+development builds, and browser tests. The UI is embedded in the Go binary and
+uses the same listener as the API and shard forwarding; there is no second
+application port or separately deployed frontend server.
+
 ## OIDC Providers
 
 For Keycloak or another compatible provider, set `GITONE_OIDC_ISSUER`,
@@ -203,8 +220,9 @@ User and group namespace records share `auth/users/<name>.json` for compatibilit
 with existing user bindings. Do not expire, delete, or reassign those records.
 
 Successful login redirects to `/<username>` (also available as `/<username>/`),
-which returns the current identity and CSRF token as JSON.
-`GET /<username>/auth/session` returns the same information.
+which serves the browser interface for HTML navigation. JSON clients retain the
+current identity and CSRF-token response, and
+`GET /<username>/auth/session` returns that information explicitly.
 Session cookies are signed, encrypted, Secure, HttpOnly, host-only, SameSite=Lax,
 and expire after 12 hours. Shared keys allow verification after forwarding or
 pod replacement. Changing keys invalidates existing sessions and login attempts;
@@ -221,7 +239,7 @@ does not grant access to another user's private space. Unsafe methods require
 cookie; it does not revoke a copied cookie, which remains valid until expiry.
 Liveness/readiness endpoints remain unauthenticated.
 
-This implements browser login, not Git CLI credentials or a login UI. Git/LFS
+This implements browser login and a UI, not Git CLI credentials. Git/LFS
 engines still return `501`. Authentication is opt-in for existing deployments;
 with it disabled, the previous unauthenticated protocol stubs remain.
 
@@ -271,8 +289,9 @@ JSON bodies require `Content-Type: application/json`; all mutations require the
 same session/Origin/CSRF checks. Members share their `userId` from their personal
 `/<username>/auth/session` endpoint. Invitations target that immutable ID,
 not an email or mutable display name, and grant access only after acceptance.
-The owner shares the group URL with the invitee; there is no email delivery or
-invitation UI. Pending invitations remain until accepted or canceled.
+The UI resolves registered usernames to immutable IDs before inviting them and
+provides invitation acceptance and membership management. There is no email
+delivery. Pending invitations remain until accepted or canceled.
 
 The creator starts as owner and may promote another accepted member to owner.
 Removing or demoting the last owner returns `409`, including under concurrent
@@ -285,13 +304,19 @@ for Google login: members log in through their personal space.
 ## Build And Test
 
 ```sh
-make build
+make build               # compile TypeScript and embed it in the Go binary
 make test
 make lint
+make ui-check            # TypeScript checks and Vite production build
+make test-ui             # Playwright against a running local Compose stack
 ```
 
-Direct equivalents are `go test -race ./...`, `go vet ./...`, and
-`go build ./cmd/gitone`.
+Local source builds require Go and Node.js 22.12+ with npm; `make run` builds both
+inside Docker and needs neither on the host. Direct Go checks remain
+`go test -race ./...` and `go vet ./...`. Run `make ui` before a direct
+`go build ./cmd/gitone` to include the interface. A Go-only build from a fresh
+checkout serves a clear UI-build-required page while leaving API/protocol
+handlers available. Generated UI files are not committed.
 
 ## Kubernetes
 

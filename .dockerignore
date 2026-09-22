@@ -10,3 +10,10 @@ tmp
 .env
 .env.*
 *.pdf
+web/node_modules
+web/dist
+web/test-results
+web/playwright-report
+internal/webui/dist/index.html
+internal/webui/dist/assets
+.playwright-mcp

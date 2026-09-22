@@ -1,6 +1,6 @@
 module github.com/define42/GitOneS3
 
-go 1.24.0
+go 1.24.1
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.0
@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.1
 	github.com/aws/smithy-go v1.28.1
 	github.com/coreos/go-oidc/v3 v3.16.0
+	github.com/danielgtaylor/huma/v2 v2.36.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/gorilla/securecookie v1.1.2
 	golang.org/x/oauth2 v0.34.0
@@ -28,4 +29,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.38.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.43.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.0 // indirect
+	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/text v0.34.0 // indirect
 )

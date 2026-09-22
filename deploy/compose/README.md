@@ -22,8 +22,9 @@ pods; each still listens on **one HTTP port, 8080** inside the network.
 | Service | Address |
 | --- | --- |
 | GitOne | <https://gitone.localhost:8443> |
-| Alice login | <https://gitone.localhost:8443/alice/auth/oidc/login> |
-| Bob login | <https://gitone.localhost:8443/bob/auth/oidc/login> |
+| Register a GitOne username | <https://gitone.localhost:8443/auth/register> |
+| Sign in | <https://gitone.localhost:8443/auth/login> |
+| API documentation | <https://gitone.localhost:8443/api/docs> |
 | Keycloak admin | <https://keycloak.gitone.localhost:8443/admin/> |
 | MinIO S3 | <http://localhost:9000> |
 | MinIO console | <http://localhost:9001> |
@@ -31,9 +32,19 @@ pods; each still listens on **one HTTP port, 8080** inside the network.
 Demo realm accounts are `alice` / `alice-dev-password` and
 `bob` / `bob-dev-password`. They have verified example email addresses, require
 no setup steps, and use authorization code flow with PKCE (password/direct grant
-is disabled). First login binds the chosen GitOne username to the Keycloak
-subject. GitOne still returns session/group JSON; the application UI and Git/LFS
-engines are not implemented yet.
+is disabled). In the GitOne UI, register an available username and sign in to
+Keycloak with either demo account. The GitOne username is your choice; it does
+not have to match the Keycloak login. Registration binds that username to the
+Keycloak subject permanently. Later choose **Sign in** with the registered
+GitOne username and the same Keycloak account.
+
+From your personal space, create a shared group using an available name.
+The creator becomes its owner. Invite another registered GitOne username as
+reader, developer, or owner; the invitee accepts from their invitations before
+gaining access. Owners can change roles and remove members, but cannot remove
+or demote the last owner. **Sign out** clears the GitOne browser session; it
+does not end Keycloak's separate SSO session. Git/LFS engines still return
+`501 Not Implemented`; the UI does not simulate repository operations.
 
 Keycloak's admin username is `admin`; its generated password is in
 `.local/keycloak.env`. MinIO's username is `gitone-local`; its generated password
@@ -71,6 +82,7 @@ curl --noproxy '*' --cacert .local/tls/ca.crt \
 ```sh
 make run                 # initialize, build, start in background, wait for health
 make smoke               # real OIDC login + group invitation/access test
+make test-ui             # Playwright browser flows (install test tools below)
 make logs                # follow service logs
 make stop                # stop/remove containers; preserve data and keys
 docker compose ps        # inspect all four GitOne instances and dependencies
@@ -82,6 +94,23 @@ claims and transactions, and shared cookies through the round-robin proxy.
 It checks all four shard readiness endpoints, invites/accepts a member, enforces
 reader permissions, and verifies immediate revocation. It creates uniquely
 named `smoke-*` user/group namespace records, which remain in local storage.
+
+For the browser suite, install Node.js 22.12+ on the host, then run:
+
+```sh
+npm --prefix web ci
+cd web
+npx playwright install chromium
+cd ..
+make test-ui
+```
+
+The Playwright configuration targets the running Compose stack and allows its
+generated local certificate only in the test browser. Application TLS
+verification remains enabled. Browser traces, screenshots, and MCP artifacts
+are gitignored because failed OIDC navigation may contain temporary login
+parameters. The browser tests also create permanent, uniquely named local
+namespace records. See [the UI guide](../../docs/browser-ui.md).
 
 MinIO data and Keycloak users/subjects live in named Docker volumes. Secrets and
 the local CA live in the gitignored `.local/` directory. Keep these together:
@@ -106,6 +135,8 @@ issuer, without split-issuer overrides or insecure TLS exceptions.
 The realm imports one confidential client (`gitone`), an exact callback URI
 `https://gitone.localhost:8443/auth/oidc/callback`, and the two demo users.
 Application roles and group memberships remain in GitOne, not Keycloak roles.
+The Keycloak proxy reserves a 16 KiB response-header buffer for SSO redirects,
+which carry both signed callback state and multiple identity-provider cookies.
 
 The MinIO image is built from the pinned patched community source release
 `RELEASE.2025-10-15T17-29-55Z`. Upstream distributed that release as source, not

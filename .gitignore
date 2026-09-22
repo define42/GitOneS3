@@ -1,6 +1,13 @@
 # Build and test artifacts.
 bin/
 dist/
+!internal/webui/dist/
+internal/webui/dist/*
+!internal/webui/dist/README.txt
+web/node_modules/
+web/test-results/
+web/playwright-report/
+/.playwright-mcp/
 /gitone
 *.test
 *.out

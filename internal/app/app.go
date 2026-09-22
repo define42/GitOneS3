@@ -21,6 +21,7 @@ import (
 	"github.com/define42/GitOneS3/internal/proxy"
 	"github.com/define42/GitOneS3/internal/shard"
 	"github.com/define42/GitOneS3/internal/storage/s3store"
+	"github.com/define42/GitOneS3/internal/webui"
 )
 
 // App owns the HTTP listener and forwarding transport for one shard.
@@ -117,10 +118,14 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return nil, fmt.Errorf("create routing handler: %w", err)
 	}
+	uiHandler, err := webui.NewHandler(routingHandler, parser)
+	if err != nil {
+		return nil, fmt.Errorf("create browser interface: %w", err)
+	}
 
 	shardLogger := logger.With("shard_id", cfg.LocalShard)
 	publicHandler := httpserver.WithHealth(
-		httpserver.LogRequests(routingHandler, shardLogger),
+		httpserver.LogRequests(uiHandler, shardLogger),
 		objectStore,
 	)
 	server, err := httpserver.New(

@@ -32,6 +32,9 @@ const (
 
 type loginState struct {
 	Issuer   string `json:",omitempty"`
+	Mode     string `json:",omitempty"`
+	UI       bool   `json:",omitempty"`
+	ReturnTo string `json:",omitempty"`
 	Username string
 	Owner    shard.ShardID
 	ID       string
@@ -84,6 +87,7 @@ type Service struct {
 	callbackPath string
 	loginCodec   *securecookie.SecureCookie
 	sessionCodec *securecookie.SecureCookie
+	api          http.Handler
 }
 
 func New(options Options) (*Service, error) {
@@ -100,13 +104,15 @@ func New(options Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{
+	service := &Service{
 		local: options.LocalShard, router: options.Router, store: options.Store,
 		provider: options.Provider, next: options.Next, origin: options.Config.PublicURL,
 		issuer: options.Config.IssuerURL(), callbackPath: options.Config.CallbackPath(),
 		loginCodec:   securecookie.New(hash, block).MaxAge(int(loginLifetime.Seconds())).SetSerializer(securecookie.JSONEncoder{}),
 		sessionCodec: securecookie.New(hash, block).MaxAge(int(sessionLifetime.Seconds())).SetSerializer(securecookie.JSONEncoder{}),
-	}, nil
+	}
+	service.api = service.newAPIHandler()
+	return service, nil
 }
 
 func (s *Service) ShardCount() uint32 { return s.router.ShardCount() }
@@ -114,6 +120,9 @@ func (s *Service) ShardCount() uint32 { return s.router.ShardCount() }
 // Resolve authenticates callback routing data without exchanging the code.
 // State never supplies a URL or hostname; destinations come from shard DNS.
 func (s *Service) Resolve(r *http.Request) (shard.Route, error) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		return s.resolveAPI(r)
+	}
 	if r.URL.Path == s.callbackPath {
 		state, err := s.decodeState(r)
 		if err != nil {
@@ -155,12 +164,16 @@ func (s *Service) decodeState(r *http.Request) (loginState, error) {
 		identityIssuer(Identity{Issuer: state.Issuer}) != s.issuer {
 		return state, errors.New("invalid callback state")
 	}
+	if (state.Mode != "" && state.Mode != "login" && state.Mode != "register") || !s.validReturnTo(state.ReturnTo) {
+		return state, errors.New("invalid callback destination")
+	}
 	return state, nil
 }
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	route, err := s.Resolve(r)
 	if err != nil {
 		http.Error(w, "invalid authentication request", http.StatusBadRequest)
@@ -168,6 +181,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if route.Owner != s.local {
 		http.Error(w, "authentication routing mismatch", http.StatusBadGateway)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		s.api.ServeHTTP(w, r)
 		return
 	}
 	if r.URL.Path == s.callbackPath {
@@ -248,15 +265,33 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) login(w http.ResponseWriter, r *http.Request, username string) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || len(query["mode"]) > 1 || len(query["ui"]) > 1 || len(query["returnTo"]) > 1 {
+		http.Error(w, "invalid login parameters", http.StatusBadRequest)
+		return
+	}
+	state := loginState{Username: username, Mode: query.Get("mode"), UI: query.Get("ui") == "1", ReturnTo: query.Get("returnTo")}
+	if (state.Mode != "" && state.Mode != "login" && state.Mode != "register") || !s.validReturnTo(state.ReturnTo) {
+		http.Error(w, "invalid login parameters", http.StatusBadRequest)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	record, _, err := s.loadNamespace(ctx, username)
 	if err == nil && record.Type != userNamespace {
-		http.Error(w, "namespace belongs to a group; log in through your user space", http.StatusConflict)
+		s.loginError(w, r, state, "namespace belongs to a group; log in through your user space", http.StatusConflict)
 		return
 	}
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		serverError(w)
+		return
+	}
+	if state.Mode == "register" && err == nil {
+		s.loginError(w, r, state, "username is already claimed", http.StatusConflict)
+		return
+	}
+	if state.Mode == "login" && errors.Is(err, storage.ErrNotFound) {
+		s.loginError(w, r, state, "username is not registered", http.StatusNotFound)
 		return
 	}
 	id, err := randomToken()
@@ -279,7 +314,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request, username string)
 		serverError(w)
 		return
 	}
-	state := loginState{Username: username, Owner: s.local, ID: id, Origin: s.origin, Expires: time.Now().Add(loginLifetime).Unix()}
+	state.Owner, state.ID, state.Origin, state.Expires = s.local, id, s.origin, time.Now().Add(loginLifetime).Unix()
 	if s.issuer != config.GoogleIssuer {
 		state.Issuer = s.issuer
 	}
@@ -348,17 +383,17 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	setCookie(w, loginCookie, "", -1)
 	if query.Get("error") != "" {
-		http.Error(w, "login declined", http.StatusUnauthorized)
+		s.loginError(w, r, state, "login declined", http.StatusUnauthorized)
 		return
 	}
 	identity, err := s.provider.Exchange(ctx, query.Get("code"), tx.Verifier, tx.Nonce)
 	if err != nil || !validIdentity(identity) || identityIssuer(identity) != s.issuer {
-		http.Error(w, "authentication failed", http.StatusUnauthorized)
+		s.loginError(w, r, state, "authentication failed", http.StatusUnauthorized)
 		return
 	}
-	if err := s.bindUser(ctx, state.Username, identity); err != nil {
+	if err := s.completeLogin(ctx, state, identity); err != nil {
 		if errors.Is(err, errUsernameTaken) {
-			http.Error(w, "username belongs to another account", http.StatusConflict)
+			s.loginError(w, r, state, "username is already claimed or belongs to another account", http.StatusConflict)
 		} else {
 			serverError(w)
 		}
@@ -376,7 +411,70 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setCookie(w, sessionCookie, encoded, int(sessionLifetime.Seconds()))
-	http.Redirect(w, r, "/"+state.Username, http.StatusSeeOther)
+	destination := state.ReturnTo
+	if destination == "" {
+		destination = "/" + state.Username
+	}
+	http.Redirect(w, r, destination, http.StatusSeeOther)
+}
+
+// Only canonical UI routes may be preserved across the OIDC round trip. No
+// hosts, query strings, encoded paths, or protocol endpoints are destinations.
+func (s *Service) validReturnTo(target string) bool {
+	if target == "" || target == "/" || target == "/auth/new-group" {
+		return true
+	}
+	parts := strings.Split(strings.TrimPrefix(target, "/"), "/")
+	if !strings.HasPrefix(target, "/") || len(parts) == 0 || parts[0] == "auth" {
+		return false
+	}
+	if _, err := s.router.Owner(parts[0]); err != nil {
+		return false
+	}
+	suffix := strings.TrimSuffix(strings.TrimPrefix(target, "/"+parts[0]), "/")
+	return suffix == "" || suffix == "/settings" || suffix == "/invitations/accept"
+}
+
+func (s *Service) loginError(w http.ResponseWriter, r *http.Request, state loginState, message string, status int) {
+	if !state.UI {
+		http.Error(w, message, status)
+		return
+	}
+	path := "/auth/login"
+	if state.Mode == "register" {
+		path = "/auth/register"
+	}
+	query := url.Values{"error": {message}, "username": {state.Username}}
+	if state.ReturnTo != "" {
+		query.Set("returnTo", state.ReturnTo)
+	}
+	http.Redirect(w, r, path+"?"+query.Encode(), http.StatusSeeOther)
+}
+
+func (s *Service) completeLogin(ctx context.Context, state loginState, identity Identity) error {
+	switch state.Mode {
+	case "register":
+		record := namespaceRecord{SchemaVersion: 1, Type: userNamespace, Identity: identity}
+		if err := s.writeNamespace(ctx, state.Username, record, ""); err != nil {
+			if isNamespaceConflict(err) {
+				return errUsernameTaken
+			}
+			return err
+		}
+		return nil
+	case "login":
+		record, _, err := s.loadNamespace(ctx, state.Username)
+		if err != nil {
+			return err
+		}
+		if record.Type != userNamespace || userID(record.Identity) != userID(identity) {
+			return errUsernameTaken
+		}
+		return nil
+	default:
+		// Preserve the original first-login registration API for existing clients.
+		return s.bindUser(ctx, state.Username, identity)
+	}
 }
 
 func (s *Service) readSession(r *http.Request) (session, error) {
