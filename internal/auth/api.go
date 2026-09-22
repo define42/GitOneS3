@@ -142,7 +142,7 @@ func (s *Service) resolveAPI(r *http.Request) (shard.Route, error) {
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	if len(parts) >= 4 && parts[0] == "api" && parts[1] == "v1" &&
-		(parts[2] == "names" || parts[2] == "users" || parts[2] == "groups") {
+		(parts[2] == "names" || parts[2] == "users" || parts[2] == "groups" || parts[2] == "repos") {
 		name := parts[3]
 		owner, err := s.router.Owner(name)
 		if err != nil || name == "auth" {
@@ -210,6 +210,7 @@ func (s *Service) newAPIHandler() http.Handler {
 		func(ctx context.Context, input *removeMemberInput) (*groupOutput, error) {
 			return s.apiUpdateGroup(ctx, input.Name, "remove", input.Body.UserID, "")
 		})
+	s.registerRepositoryAPI(api)
 	return mux
 }
 

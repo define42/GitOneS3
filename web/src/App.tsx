@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api, errorMessage, safeReturnTo, validName } from "./api";
 import type { Group, Role, Session, Space } from "./api";
+import { NewRepository, RepositoryList, RepositoryPage } from "./Repositories";
 
 function Icon({
   name = "branch",
@@ -120,6 +121,10 @@ function Header({ session }: { session: Session }) {
         <div className="header-actions">
           {session.authenticated ? (
             <>
+              <a className="header-link new-link" href="/auth/new-repository">
+                <Icon name="plus" size={18} />
+                New repository
+              </a>
               <a className="header-link new-link" href="/auth/new-group">
                 <Icon name="plus" size={18} />
                 New group
@@ -365,6 +370,10 @@ function Sidebar({ session }: { session: Session }) {
           <Icon name="lock" />
           Personal space
         </a>
+        <a href="/auth/new-repository" className="side-link">
+          <Icon name="plus" />
+          New repository
+        </a>
         <a href="/auth/new-group" className="side-link">
           <Icon name="plus" />
           Create a group
@@ -441,6 +450,7 @@ function Dashboard({ session }: { session: Session }) {
           <span className="badge">Personal</span>
           <span className="personal-email">{session.identity?.email}</span>
         </section>
+        <RepositoryList namespace={session.username!} />
         {error && (
           <Notice>
             {error}{" "}
@@ -544,9 +554,9 @@ function Dashboard({ session }: { session: Session }) {
         <div className="info-note">
           <Icon name="branch" size={19} />
           <p>
-            <strong>Your spaces are ready for collaboration.</strong> Repository
-            hosting is still under development. Account and group management are
-            available now.
+            <strong>Your projects, your team.</strong> Create private
+            repositories in your personal space or a shared group. Repository
+            access follows the space’s membership.
           </p>
         </div>
       </div>
@@ -995,29 +1005,7 @@ function GroupPage({
       ) : (
         <div className="group-overview">
           <div>
-            <section className="panel empty-state">
-              <div className="empty-icon">
-                <Icon name="group" size={32} />
-              </div>
-              <h2>Your team’s space is ready</h2>
-              <p>
-                {owner
-                  ? "Bring your team together by inviting collaborators and choosing their access."
-                  : `You have ${group.role} access to this shared space.`}
-              </p>
-              {owner && (
-                <a className="button primary" href={`/${name}/settings`}>
-                  Manage members
-                </a>
-              )}
-            </section>
-            <div className="info-note">
-              <Icon name="branch" />
-              <p>
-                Repository hosting is under development. Group membership and
-                access management are ready to use.
-              </p>
-            </div>
+            <RepositoryList namespace={name} />
           </div>
           <aside className="group-about">
             <h2>About this group</h2>
@@ -1138,12 +1126,15 @@ export function App() {
     };
   }, []);
   const path = location.pathname.replace(/\/$/, "") || "/";
+  const destination = path + location.search;
   const publicPage =
     path === "/" || path === "/auth/login" || path === "/auth/register";
   useEffect(() => {
     if (session && !session.authenticated && !publicPage)
-      location.replace(`/auth/login?returnTo=${encodeURIComponent(path)}`);
-  }, [session, publicPage, path]);
+      location.replace(
+        `/auth/login?returnTo=${encodeURIComponent(safeReturnTo(destination))}`,
+      );
+  }, [session, publicPage, destination]);
   if (error)
     return (
       <main id="main" className="narrow container">
@@ -1171,11 +1162,15 @@ export function App() {
   else if (path === "/" || path === `/${session.username}`)
     content = <Dashboard session={session} />;
   else if (path === "/auth/new-group") content = <NewGroup session={session} />;
+  else if (path === "/auth/new-repository")
+    content = <NewRepository session={session} />;
   else {
     const [, name, subpath, action] = path.split("/");
     content =
       subpath === "invitations" && action === "accept" ? (
         <Invitation session={session} name={name} />
+      ) : subpath && subpath !== "settings" ? (
+        <RepositoryPage namespace={name} name={subpath} />
       ) : (
         <GroupPage
           session={session}

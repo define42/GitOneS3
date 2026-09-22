@@ -30,6 +30,9 @@ func TestResolveAPI(t *testing.T) {
 		{"user owner", "/api/v1/users/alice", 1, false},
 		{"group owner", "/api/v1/groups/acme", 0, false},
 		{"group members owner", "/api/v1/groups/acme/members", 0, false},
+		{"repository list owner", "/api/v1/repos/alice", 1, false},
+		{"repository content owner", "/api/v1/repos/alice/project/blob?path=README.md", 1, false},
+		{"repository group owner", "/api/v1/repos/acme/project", 0, false},
 		{"space shard", "/api/v1/spaces?shard=1", 1, false},
 		{"missing shard", "/api/v1/spaces", 0, true},
 		{"duplicate shard", "/api/v1/spaces?shard=0&shard=1", 0, true},
@@ -324,11 +327,18 @@ func TestAPIOpenAPIAndCrossShardForwarding(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &document); err != nil {
 		t.Fatal(err)
 	}
-	if w.Code != 200 || document.OpenAPI != "3.1.0" || len(document.Paths) != 10 {
+	if w.Code != 200 || document.OpenAPI != "3.1.0" || len(document.Paths) != 16 {
 		t.Fatalf("invalid API specification: status=%d, paths=%d, openapi=%s", w.Code, len(document.Paths), document.OpenAPI)
 	}
 	if !strings.Contains(string(document.Paths["/api/v1/groups/{name}/invitations"]), `"security"`) {
 		t.Fatal("OpenAPI does not describe session authentication")
+	}
+	for _, path := range []string{"/api/v1/repos/{namespace}", "/api/v1/repos/{namespace}/{repository}",
+		"/api/v1/repos/{namespace}/{repository}/branches", "/api/v1/repos/{namespace}/{repository}/tree",
+		"/api/v1/repos/{namespace}/{repository}/blob", "/api/v1/repos/{namespace}/{repository}/commits"} {
+		if !strings.Contains(string(document.Paths[path]), `"security"`) {
+			t.Fatalf("missing authenticated repository operation: %s", path)
+		}
 	}
 }
 
@@ -403,6 +413,21 @@ func TestAPIRoutesAcrossFourShards(t *testing.T) {
 			w = groupRequest(entry, "GET", "/api/v1/groups/"+name, "", cookie, csrf)
 			if w.Code != 200 {
 				t.Fatalf("entry %d owner %d read=%d: %s", entryID, owner, w.Code, w.Body.String())
+			}
+			w = groupRequest(entry, "POST", "/api/v1/repos/"+name, `{"name":"project","initializeReadme":true}`, cookie, csrf)
+			if w.Code != expect {
+				t.Fatalf("entry %d owner %d repository creation=%d: %s", entryID, owner, w.Code, w.Body.String())
+			}
+			w = groupRequest(entry, "GET", "/api/v1/repos/"+name+"/project/blob?path=README.md", "", cookie, csrf)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), "# project") {
+				t.Fatalf("entry %d owner %d repository browse=%d: %s", entryID, owner, w.Code, w.Body.String())
+			}
+			// The namespace owner is the only bucket containing the repository.
+			for storageID, service := range services {
+				items, err := service.repositories.List(context.Background(), name)
+				if err != nil || (storageID == owner && len(items) != 1) || (storageID != owner && len(items) != 0) {
+					t.Fatalf("namespace %s storage %d repositories=%d err=%v", name, storageID, len(items), err)
+				}
 			}
 		}
 	}

@@ -12,11 +12,13 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gorilla/securecookie"
 
 	"github.com/define42/GitOneS3/internal/authz"
 	"github.com/define42/GitOneS3/internal/config"
+	"github.com/define42/GitOneS3/internal/repository"
 	"github.com/define42/GitOneS3/internal/shard"
 	"github.com/define42/GitOneS3/internal/storage"
 )
@@ -28,6 +30,9 @@ const (
 	loginCookie      = "__Host-gitone-login"
 	stateLabel       = "gitone-google-state-v1"
 	transactionLabel = "gitone-google-transaction-v1"
+	// State and the encrypted transaction must both fit securecookie's 4096
+	// byte encoded limit. Budget serialized bytes, including JSON escaping.
+	maxReturnToBytes = 1024
 )
 
 type loginState struct {
@@ -80,6 +85,7 @@ type Service struct {
 	local        shard.ShardID
 	router       *shard.Router
 	store        storage.ObjectStore
+	repositories *repository.Store
 	provider     Provider
 	next         http.Handler
 	origin       string
@@ -104,9 +110,14 @@ func New(options Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	repositories, err := repository.New(options.Store)
+	if err != nil {
+		return nil, err
+	}
 	service := &Service{
 		local: options.LocalShard, router: options.Router, store: options.Store,
-		provider: options.Provider, next: options.Next, origin: options.Config.PublicURL,
+		repositories: repositories,
+		provider:     options.Provider, next: options.Next, origin: options.Config.PublicURL,
 		issuer: options.Config.IssuerURL(), callbackPath: options.Config.CallbackPath(),
 		loginCodec:   securecookie.New(hash, block).MaxAge(int(loginLifetime.Seconds())).SetSerializer(securecookie.JSONEncoder{}),
 		sessionCodec: securecookie.New(hash, block).MaxAge(int(sessionLifetime.Seconds())).SetSerializer(securecookie.JSONEncoder{}),
@@ -418,21 +429,78 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, destination, http.StatusSeeOther)
 }
 
-// Only canonical UI routes may be preserved across the OIDC round trip. No
-// hosts, query strings, encoded paths, or protocol endpoints are destinations.
+// Only canonical UI routes may be preserved across the OIDC round trip.
+// Repository navigation permits bounded, allow-listed query parameters, never
+// hosts, encoded route paths, fragments, or protocol endpoints.
 func (s *Service) validReturnTo(target string) bool {
-	if target == "" || target == "/" || target == "/auth/new-group" {
+	if target == "" {
 		return true
 	}
-	parts := strings.Split(strings.TrimPrefix(target, "/"), "/")
-	if !strings.HasPrefix(target, "/") || len(parts) == 0 || parts[0] == "auth" {
+	u, err := url.Parse(target)
+	if err != nil || len(target) > maxReturnToBytes || u.IsAbs() || u.Host != "" || u.User != nil || u.Opaque != "" ||
+		u.Fragment != "" || u.RawPath != "" || u.EscapedPath() != u.Path ||
+		!strings.HasPrefix(u.Path, "/") || strings.Contains(u.Path, "//") || strings.ContainsAny(target, "\\#") ||
+		strings.ContainsFunc(target, unicode.IsControl) {
+		return false
+	}
+	serialized, err := json.Marshal(target)
+	if err != nil || len(serialized) > maxReturnToBytes {
+		return false
+	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return false
+	}
+	for _, values := range query {
+		if len(values) != 1 || strings.ContainsFunc(values[0], unicode.IsControl) || strings.Contains(values[0], "\\") {
+			return false
+		}
+	}
+	if u.Path == "/auth/new-repository" {
+		for key, values := range query {
+			if key != "namespace" || values[0] == "auth" {
+				return false
+			}
+			if _, err := s.router.Owner(values[0]); err != nil {
+				return false
+			}
+		}
+		return true
+	}
+	if u.Path == "/" || u.Path == "/auth/new-group" {
+		return len(query) == 0
+	}
+	parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(u.Path, "/"), "/"), "/")
+	if parts[0] == "auth" {
 		return false
 	}
 	if _, err := s.router.Owner(parts[0]); err != nil {
 		return false
 	}
-	suffix := strings.TrimSuffix(strings.TrimPrefix(target, "/"+parts[0]), "/")
-	return suffix == "" || suffix == "/settings" || suffix == "/invitations/accept"
+	if len(parts) == 2 && repository.ValidName(parts[1]) {
+		for key, values := range query {
+			switch key {
+			case "ref":
+				if len(values[0]) > 256 {
+					return false
+				}
+			case "path":
+				if len(values[0]) > 4096 {
+					return false
+				}
+			case "view":
+				if values[0] != "commits" {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		return true
+	}
+	return len(query) == 0 && (len(parts) == 1 ||
+		(len(parts) == 2 && parts[1] == "settings") ||
+		(len(parts) == 3 && parts[1] == "invitations" && parts[2] == "accept"))
 }
 
 func (s *Service) loginError(w http.ResponseWriter, r *http.Request, state loginState, message string, status int) {

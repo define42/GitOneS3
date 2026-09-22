@@ -43,8 +43,14 @@ The creator becomes its owner. Invite another registered GitOne username as
 reader, developer, or owner; the invitee accepts from their invitations before
 gaining access. Owners can change roles and remove members, but cannot remove
 or demote the last owner. **Sign out** clears the GitOne browser session; it
-does not end Keycloak's separate SSO session. Git/LFS engines still return
-`501 Not Implemented`; the UI does not simulate repository operations.
+does not end Keycloak's separate SSO session.
+
+Use **New repository** to create a private repository in your personal namespace
+or a group where you are a developer or owner. Optional README initialization
+writes real Git objects to MinIO, and the UI can browse branches, files, and
+commit history. Group readers can browse but cannot create repositories. Git
+Smart HTTP and LFS still return `501 Not Implemented`; Git client clone, push,
+and pull are not available yet.
 
 Keycloak's admin username is `admin`; its generated password is in
 `.local/keycloak.env`. MinIO's username is `gitone-local`; its generated password

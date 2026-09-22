@@ -28,7 +28,8 @@ body {
 }
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 button,
@@ -51,7 +52,9 @@ a:hover {
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
-select:focus-visible {
+select:focus-visible,
+textarea:focus-visible,
+pre:focus-visible {
   outline: 3px solid #0969da;
   outline-offset: 3px;
 }
@@ -295,7 +298,8 @@ footer a {
   font-weight: 600;
 }
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 38px;
   border: 1px solid #8c959f;
@@ -307,6 +311,9 @@ select {
 }
 input::placeholder {
   color: #6e7781;
+}
+textarea {
+  resize: vertical;
 }
 input[aria-invalid="true"] {
   border-color: var(--danger);
@@ -824,6 +831,281 @@ label {
 }
 .group-about .badge + p {
   margin-top: 12px;
+}
+.repository-section {
+  margin-bottom: 32px;
+  min-width: 0;
+}
+.repository-row {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.repository-row:last-child {
+  border-bottom: 0;
+}
+.repository-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 19px;
+  font-weight: 600;
+}
+.repository-row > p {
+  color: var(--muted);
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+.repository-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 16px;
+}
+.repository-name-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.3fr);
+  gap: 12px;
+  align-items: end;
+}
+.repository-name-fields > div {
+  min-width: 0;
+}
+.repository-slash {
+  color: var(--muted);
+  padding-bottom: 7px;
+  font-size: 20px;
+}
+.repository-privacy {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 22px 0;
+  border-block: 1px solid var(--border);
+  margin-bottom: 24px;
+}
+.repository-privacy p {
+  margin-top: 5px;
+  font-weight: 400;
+}
+.checkbox-field {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+.checkbox-field input {
+  width: 18px;
+  min-height: 18px;
+  flex: none;
+  margin: 2px 0 0;
+  accent-color: var(--green);
+}
+.checkbox-field .field-help {
+  display: block;
+  font-weight: 400;
+  margin-top: 4px;
+}
+.repository-page {
+  margin-block: 36px 70px;
+  min-height: calc(100vh - 275px);
+}
+.repository-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.repository-heading h1 {
+  min-width: 0;
+  font-size: 23px;
+  overflow-wrap: anywhere;
+}
+.repository-heading > svg {
+  color: var(--muted);
+}
+.repository-description {
+  margin-bottom: 20px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.repository-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.repository-toolbar > .badge {
+  margin-left: auto;
+}
+.branch-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+}
+.branch-control label {
+  margin: 0;
+}
+.branch-control select {
+  width: auto;
+  max-width: 260px;
+  min-width: 120px;
+}
+.repository-breadcrumbs {
+  margin-bottom: 16px;
+  overflow-wrap: anywhere;
+}
+.file-list,
+.file-preview {
+  overflow: hidden;
+}
+.file-list-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 18px;
+  background: var(--subtle);
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.file-row:last-child {
+  border-bottom: 0;
+}
+.file-row:hover {
+  background: var(--subtle);
+  text-decoration: none;
+}
+.file-row > span:not(.file-size) {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.file-row > svg {
+  color: var(--muted);
+}
+.file-size {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.readme-preview {
+  margin-top: 24px;
+}
+.file-preview pre {
+  margin: 0;
+  padding: 24px;
+  max-height: 70vh;
+  overflow: auto;
+  font:
+    13px/1.8 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  tab-size: 4;
+}
+.readme-preview pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.repository-subheading {
+  margin-bottom: 18px;
+}
+.commit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.commit-row:last-child {
+  border-bottom: 0;
+}
+.commit-row > div {
+  min-width: 0;
+}
+.commit-row h3 {
+  font-size: 15px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.commit-row p {
+  font-size: 12px;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+.commit-row code {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--subtle);
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+.repository-access {
+  margin-top: 22px;
+}
+.repository-error .form-actions {
+  flex-wrap: wrap;
+}
+@media (max-width: 600px) {
+  .repository-name-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+  .repository-slash {
+    display: none;
+  }
+  .repository-privacy {
+    gap: 10px;
+  }
+  .repository-row {
+    padding: 16px;
+  }
+  .repository-heading h1 {
+    font-size: 21px;
+  }
+  .repository-toolbar {
+    gap: 12px;
+  }
+  .repository-section .section-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .repository-name-fields input,
+  .repository-name-fields select,
+  .branch-control select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .file-list-heading,
+  .file-row {
+    padding-inline: 13px;
+  }
+  .file-preview pre {
+    padding: 16px;
+  }
+  .commit-row {
+    flex-wrap: wrap;
+    padding: 16px;
+  }
 }
 .settings-layout {
   display: grid;

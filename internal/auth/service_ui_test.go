@@ -118,6 +118,43 @@ func TestUIAcceptsCanonicalReturnPaths(t *testing.T) {
 	}
 }
 
+func TestUIRepositoryReturnPathCodecBudget(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		target string
+		want   int
+	}{
+		{"near limit", "/alice/project?path=" + strings.Repeat("x", 980), http.StatusFound},
+		{"raw bytes over limit", "/alice/project?path=" + strings.Repeat("x", 3000), http.StatusBadRequest},
+		{"json escaping over limit", "/alice/project?path=" + strings.Repeat("<", 400), http.StatusBadRequest},
+		{"encoded unicode", "/alice/project?path=" + strings.Repeat("%C3%A6", 100), http.StatusFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			provider := &fakeProvider{identity: Identity{Subject: "alice"}}
+			s := testService(t, 1, storage.NewMemoryStore(), provider, nil)
+			response := httptest.NewRecorder()
+			s.ServeHTTP(response, httptest.NewRequest("GET", "/alice/auth/oidc/login?mode=register&ui=1&returnTo="+url.QueryEscape(test.target), nil))
+			if response.Code != test.want {
+				t.Fatalf("login=%d, want %d: %s", response.Code, test.want, response.Body.String())
+			}
+			if test.want != http.StatusFound {
+				return
+			}
+			location, err := url.Parse(response.Header().Get("Location"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			callback := httptest.NewRecorder()
+			s.ServeHTTP(callback, callbackRequest(location.Query().Get("state"), responseCookie(t, response, loginCookie)))
+			if callback.Code != http.StatusSeeOther || callback.Header().Get("Location") != test.target {
+				t.Fatalf("callback=%d location=%q", callback.Code, callback.Header().Get("Location"))
+			}
+		})
+	}
+}
+
 func TestUICallbackRejectsWrongAccount(t *testing.T) {
 	t.Parallel()
 	s := testService(t, 1, storage.NewMemoryStore(), &fakeProvider{identity: Identity{Subject: "other"}}, nil)

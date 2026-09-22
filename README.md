@@ -51,6 +51,9 @@ Git/LFS client -> public Service -> any gitone-N
   group member roles, and conditional membership updates that preserve an owner.
 - Huma-backed, typed JSON APIs with generated OpenAPI and a GitHub-inspired
   React/TypeScript interface for registration, login, logout, and shared groups.
+- Private repository creation and browsing in personal or shared namespaces,
+  with optional README initialization, durable Git objects in S3, branch/file
+  navigation, and commit history.
 - Bounded live-compaction planning that keeps large packs intact, selects only
   fragmented small packs plus the incoming pack, and queues oversized work.
 - S3-backed readiness, structured request logs, graceful HTTP
@@ -64,7 +67,6 @@ external contracts unspecified. The owner-side dispatcher recognizes standard
 Git Smart HTTP and Git LFS routes, but currently returns `501 Not Implemented`
 until these engines are installed:
 
-- repository path metadata and creation APIs;
 - `git-upload-pack` / `git-receive-pack`, pack validation, and ref semantics;
 - the `control.git` compiler and persisted ACL generations;
 - LFS batch/content/locking/quota handlers;
@@ -88,6 +90,7 @@ internal/storage/           object and repository CAS contracts
 internal/storage/s3store/   fixed-bucket AWS S3 adapter
 internal/authz/             inherited shard-local authorization
 internal/protocol/          Smart HTTP and LFS owner-side dispatch
+internal/repository/        repository metadata, Git objects, and browser reads
 internal/maintenance/       bounded compaction planning
 internal/httpserver/        health, logging, and graceful lifecycle
 internal/webui/             embedded UI assets and narrow browser routing
@@ -265,8 +268,8 @@ Groups have three roles, inherited by repositories below that group:
 
 | Role | Access |
 | --- | --- |
-| `reader` | View the group, Git fetch, and LFS downloads |
-| `developer` | Reader access plus Git push and LFS uploads/mutations |
+| `reader` | View the group and browse its repositories; Git fetch/LFS download permission |
+| `developer` | Reader access plus repository creation; Git push/LFS mutation permission |
 | `owner` | Developer access plus invitations and membership management |
 
 Git/LFS protocol engines still return `501` after these permission checks.
@@ -300,6 +303,37 @@ persistent contention returns `409` so clients can retry. Groups are limited
 to 1,000 members, 1,000 pending invitations, and a 128 KiB namespace record.
 Renaming and deleting groups are not supported, and group names cannot be used
 for Google login: members log in through their personal space.
+
+## Repositories
+
+Use **New repository** in the UI to create a repository in your personal space
+or a shared group where you are a developer or owner. Repositories are private
+and inherit their namespace's access rules: personal repositories are restricted
+to the bound account, and group readers can browse but cannot create. There are
+no public repositories or per-repository membership overrides in this UI.
+
+Repository names are unique within their namespace and use 1–63 lowercase
+letters, numbers, periods, underscores, or hyphens, with an alphanumeric first
+and last character. Consecutive periods, the `.git` suffix, and the names
+`auth`, `settings`, `members`, and `invitations` are reserved or invalid.
+Creation claims the name atomically; a taken name returns a conflict.
+
+Add an optional description. The UI uses `main` as the default branch; the API
+also accepts a custom default branch. Enabling README initialization creates an
+actual Git blob, tree, and initial commit in
+the owning shard's S3 bucket, with durable refs and repository state. Without
+initialization, the repository is empty. No local bare repository is used as
+the source of truth.
+
+Open `/<namespace>/<repository>` to browse branches, directories, file contents,
+and commit history. File paths and refs are query parameters, not extra URL
+path components. Browse requests enforce current namespace membership, so
+removing a group member removes their subsequent repository access as well.
+
+This is repository creation and browser access, not a working Git transport.
+Git Smart HTTP and Git LFS still return `501 Not Implemented`: cloning,
+pushing, and pulling with a Git client are not available yet. Repository
+editing, deletion, and renaming are also not implemented.
 
 ## Build And Test
 

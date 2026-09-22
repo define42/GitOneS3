@@ -1,16 +1,16 @@
 # Browser interface and API
 
 GitOne's interface is a React/TypeScript application with a GitHub-inspired
-header, personal and group spaces, accessible forms, and owner settings. Vite
+header, personal and group spaces, repository browsing, accessible forms, and owner settings. Vite
 builds static assets that Go embeds into the GitOne executable. Browser pages,
 JSON APIs, authentication callbacks, Git/LFS requests, and shard forwarding all
 use the existing listener.
 
-Authentication must be enabled and configured for the session/group API and UI
+Authentication must be enabled and configured for the session/group/repository API and UI
 flows (`GITONE_AUTH_ENABLED=true` with provider credentials, public HTTPS URL,
 and shared cookie keys). `make run` supplies this configuration. An installation
 with authentication disabled keeps the existing protocol stubs but does not
-provide the UI's Huma session/group API.
+provide the UI's Huma session/group/repository API.
 
 ## User flows
 
@@ -27,19 +27,45 @@ provide the UI's Huma session/group API.
    or owner. The UI resolves the username to a provider-scoped immutable ID.
    Invitees accept before receiving access. Accepted members inherit their role
    throughout the group, and owners can cancel invitations or change membership.
-5. Sign out to clear the GitOne session. The identity provider has its own SSO
+5. Use **New repository** to create a private repository in your own namespace
+   or a group where you are a developer or owner. Optionally initialize a README
+   and then browse branches, directories, files, and commit history. Group
+   readers can browse existing repositories but cannot create them.
+6. Sign out to clear the GitOne session. The identity provider has its own SSO
    session; signing out of GitOne does not revoke a copied cookie or end that
    external session. A copied GitOne cookie remains valid until its expiry.
 
 Personal spaces live at `/<username>`; shared spaces at `/<group>`. Group
 settings use `/<group>/settings`, and direct invitation links use
-`/<group>/invitations/accept`. These routes return the same public HTML shell;
+`/<group>/invitations/accept`. Create repositories at
+`/auth/new-repository?namespace=<namespace>` and browse them at
+`/<namespace>/<repository>`, optionally with `ref`, `path`, or `view=commits`
+query parameters. These routes return the same public HTML shell;
 private data and mutations are always checked by the API on the owning shard.
 An unavailable or forbidden API response must not be treated as access merely
 because the browser can load the shell.
 
-The repository/Git/LFS engines remain extension points and return `501`; this
-interface manages identities and spaces rather than inventing repository data.
+Repository creation and browsing use durable repository metadata and actual Git
+objects in S3. README initialization writes a blob, tree, and initial commit;
+an uninitialized repository has no commits. The UI uses `main` as the default
+branch; the API can select another valid branch. Names are unique within their namespace, and
+conditional creation prevents overwriting an existing repository.
+
+All repositories are private and inherit namespace authorization. Personal
+repositories belong to the bound user; group membership is checked on each API
+request. Developers and owners may create group repositories; readers may
+browse. Public visibility and per-repository ACL overrides are not exposed.
+
+Git Smart HTTP and LFS remain extension points and return `501`; repository
+creation does not enable Git client clone, push, or pull. Repository editing,
+renaming, and deletion are not implemented.
+
+Browsing currently selects branch names (not tags or arbitrary commit IDs).
+History returns at most 100 first-parent commits, directories at most 1,000
+entries, and file previews are bounded to 1 MiB. Binary files are identified
+without rendering their contents. Namespace listings support up to 1,000
+repositories; pagination is not implemented. Login return links are bounded
+to 1,024 serialized bytes so signed OIDC state stays within its encoding limit.
 
 ## Huma API
 
@@ -64,6 +90,13 @@ available for existing clients; browser navigation is selected with
 | `POST /api/v1/groups/{name}/invitations/accept` | Accept the current user's invitation |
 | `PUT /api/v1/groups/{name}/members` | Change a role with `{userId, role}` |
 | `DELETE /api/v1/groups/{name}/members` | Remove a member with `{userId}` |
+| `GET /api/v1/repos/{namespace}` | List accessible repositories in a personal or group namespace |
+| `POST /api/v1/repos/{namespace}` | Create a private repository; requires namespace write access |
+| `GET /api/v1/repos/{namespace}/{repository}` | Read repository metadata and the caller's access |
+| `GET /api/v1/repos/{namespace}/{repository}/branches` | List published branches |
+| `GET /api/v1/repos/{namespace}/{repository}/tree?ref=main&path=docs` | Browse a directory on a branch |
+| `GET /api/v1/repos/{namespace}/{repository}/blob?ref=main&path=README.md` | Read a file on a branch |
+| `GET /api/v1/repos/{namespace}/{repository}/commits?ref=main` | Read branch commit history |
 
 Huma validates request bodies and documents their schemas and errors. Signed
 session cookies authenticate requests; mutations also require the configured
@@ -96,15 +129,18 @@ neither Node nor a frontend server. A clean checkout can still run `go test
 or a Docker build supplies the real interface.
 
 The server serves only named HTML navigation routes and `/gitone/assets/*`.
-It does not rewrite API, callback, Git, LFS, or unknown repository paths into
-HTML. The HTML shell is `no-store`; content-hashed Vite assets are immutable.
+Repository pages require a canonical two-component namespace/repository path
+and an explicit `Accept: text/html`; a trailing slash is supported. API,
+callback, `.git`, Git protocol, LFS, and deeper repository paths are not rewritten
+into HTML. The HTML shell is `no-store`; content-hashed Vite assets are immutable.
 The UI uses same-origin scripts/styles and a restrictive Content Security
 Policy without inline scripts or external CDNs.
 
 ## Verification
 
 Unit tests cover static-route separation, security headers, no-store HTML,
-immutable assets, HEAD requests, missing builds, and traversal rejection:
+immutable assets, HEAD requests, missing builds, repository-name validation,
+Git protocol passthrough, and traversal rejection:
 
 ```sh
 go test -race ./internal/webui
@@ -131,8 +167,11 @@ The suite uses real Keycloak authorization-code redirects and two separate
 browser contexts. It covers username registration and conflicts, login/logout,
 group creation, invitation discovery and acceptance, role changes, immediate
 revocation, invitation cancellation, the last-owner safeguard, owner departure,
-and mobile navigation. No authentication or group APIs are mocked.
+and mobile navigation. Repository tests cover creation in personal and shared
+spaces, duplicate names, empty repositories, README/file/branch/history views,
+reader write denial, private access, and login deep links. No authentication,
+group, or repository APIs are mocked.
 
 See [the Compose guide](../deploy/compose/README.md) for demo accounts, local CA
-trust, resource requirements, and persistence. Test-created namespace records
-remain in the local MinIO data, just like normal permanent claims.
+trust, resource requirements, and persistence. Test-created namespaces and
+repositories remain in the local MinIO data, just like normal user data.

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/define42/GitOneS3/internal/repository"
 	"github.com/define42/GitOneS3/internal/shard"
 )
 
@@ -122,7 +123,7 @@ func (h *handler) isNavigation(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
-	case "/auth/login", "/auth/register", "/auth/new-group":
+	case "/auth/login", "/auth/register", "/auth/new-group", "/auth/new-repository":
 		return true
 	}
 
@@ -133,7 +134,8 @@ func (h *handler) isNavigation(r *http.Request) bool {
 	}
 	groupSettings := len(parts) == 2 && parts[1] == "settings"
 	invitation := len(parts) == 3 && parts[1] == "invitations" && parts[2] == "accept"
-	if len(parts) != 1 && !groupSettings && !invitation {
+	repositoryPage := len(parts) == 2 && repository.ValidName(parts[1])
+	if len(parts) != 1 && !groupSettings && !invitation && !repositoryPage {
 		return false
 	}
 	// Validate the same namespace syntax and reserved names as shard routing.

@@ -72,7 +72,7 @@ func TestHandlerServeHTTP(t *testing.T) {
 		{name: "session", method: http.MethodGet, path: "/alice/auth/session", accept: "text/html"},
 		{name: "git", method: http.MethodGet, path: "/alice/repo.git/info/refs", accept: "text/html"},
 		{name: "lfs", method: http.MethodGet, path: "/alice/repo.git/info/lfs/objects/batch", accept: "text/html"},
-		{name: "unknown page", method: http.MethodGet, path: "/alice/unknown", accept: "text/html"},
+		{name: "unknown page", method: http.MethodGet, path: "/alice/unknown/path", accept: "text/html"},
 		{name: "reserved api", method: http.MethodGet, path: "/api", accept: "text/html"},
 		{name: "reserved gitone", method: http.MethodGet, path: "/gitone", accept: "text/html"},
 		{name: "reserved system", method: http.MethodGet, path: "/system", accept: "text/html"},
@@ -116,6 +116,208 @@ func TestHandlerServeHTTP(t *testing.T) {
 			}
 			if tt.method != http.MethodHead && response.Body.String() != "<!doctype html><title>GitOne</title>" {
 				t.Error("wrong shell body")
+			}
+			assertSecurityHeaders(t, response)
+		})
+	}
+}
+
+func TestHandlerRepositoryNavigation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		accept string
+		shell  bool
+	}{
+		{
+			name: "create repository", method: http.MethodGet,
+			path: "/auth/new-repository", accept: "text/html", shell: true,
+		},
+		{
+			name: "create in namespace", method: http.MethodGet,
+			path: "/auth/new-repository?namespace=alice", accept: "text/html", shell: true,
+		},
+		{
+			name: "personal repository", method: http.MethodGet,
+			path: "/alice/my-project", accept: "text/html", shell: true,
+		},
+		{
+			name: "group repository slash", method: http.MethodGet,
+			path: "/team/my-project/", accept: "text/html", shell: true,
+		},
+		{
+			name: "repository head", method: http.MethodHead,
+			path: "/alice/my-project", accept: "text/html", shell: true,
+		},
+		{
+			name: "browse branch and file", method: http.MethodGet,
+			path: "/alice/my-project?ref=feature%2Fdocs&path=docs%2FREADME.md", accept: "text/html", shell: true,
+		},
+		{
+			name: "commit history", method: http.MethodGet,
+			path: "/team/my-project?ref=main&view=commits", accept: "text/html", shell: true,
+		},
+		{
+			name: "repository punctuation", method: http.MethodGet,
+			path: "/alice/my_project.v1", accept: "text/html", shell: true,
+		},
+		{
+			name: "single character", method: http.MethodGet,
+			path: "/alice/a", accept: "text/html", shell: true,
+		},
+		{
+			name: "maximum length", method: http.MethodGet,
+			path: "/alice/" + strings.Repeat("a", 63), accept: "text/html", shell: true,
+		},
+		{
+			name: "existing settings page", method: http.MethodGet,
+			path: "/team/settings", accept: "text/html", shell: true,
+		},
+		{
+			name: "existing invitation page", method: http.MethodGet,
+			path: "/team/invitations/accept", accept: "text/html", shell: true,
+		},
+		{
+			name: "json repository request", method: http.MethodGet,
+			path: "/alice/my-project", accept: "application/json",
+		},
+		{
+			name: "unspecified accept", method: http.MethodGet,
+			path: "/alice/my-project",
+		},
+		{
+			name: "wildcard accept", method: http.MethodGet,
+			path: "/alice/my-project", accept: "*/*",
+		},
+		{
+			name: "html disabled", method: http.MethodGet,
+			path: "/alice/my-project", accept: "text/html;q=0",
+		},
+		{
+			name: "post repository", method: http.MethodPost,
+			path: "/alice/my-project", accept: "text/html",
+		},
+		{
+			name: "create requires html", method: http.MethodGet,
+			path: "/auth/new-repository?namespace=alice", accept: "application/json",
+		},
+		{
+			name: "create rejects post", method: http.MethodPost,
+			path: "/auth/new-repository", accept: "text/html",
+		},
+		{
+			name: "git suffix", method: http.MethodGet,
+			path: "/alice/my-project.git", accept: "text/html",
+		},
+		{
+			name: "git suffix slash", method: http.MethodGet,
+			path: "/alice/my-project.git/", accept: "text/html",
+		},
+		{
+			name: "git discovery", method: http.MethodGet,
+			path: "/alice/my-project.git/info/refs?service=git-upload-pack", accept: "text/html",
+		},
+		{
+			name: "git rpc", method: http.MethodPost,
+			path: "/alice/my-project.git/git-receive-pack", accept: "text/html",
+		},
+		{
+			name: "suffixless git discovery", method: http.MethodGet,
+			path: "/alice/my-project/info/refs", accept: "text/html",
+		},
+		{
+			name: "lfs request", method: http.MethodPost,
+			path: "/alice/my-project.git/info/lfs/objects/batch", accept: "text/html",
+		},
+		{
+			name: "repository api", method: http.MethodGet,
+			path: "/api/v1/repos/alice/my-project", accept: "text/html",
+		},
+		{
+			name: "reserved auth", method: http.MethodGet,
+			path: "/alice/auth", accept: "text/html",
+		},
+		{
+			name: "reserved members", method: http.MethodGet,
+			path: "/team/members", accept: "text/html",
+		},
+		{
+			name: "reserved invitations", method: http.MethodGet,
+			path: "/team/invitations", accept: "text/html",
+		},
+		{
+			name: "leading punctuation", method: http.MethodGet,
+			path: "/alice/.hidden", accept: "text/html",
+		},
+		{
+			name: "trailing punctuation", method: http.MethodGet,
+			path: "/alice/project_", accept: "text/html",
+		},
+		{
+			name: "repository case", method: http.MethodGet,
+			path: "/alice/My-project", accept: "text/html",
+		},
+		{
+			name: "consecutive dots", method: http.MethodGet,
+			path: "/alice/my..project", accept: "text/html",
+		},
+		{
+			name: "too long", method: http.MethodGet,
+			path: "/alice/" + strings.Repeat("a", 64), accept: "text/html",
+		},
+		{
+			name: "encoded repository", method: http.MethodGet,
+			path: "/alice/%6dy-project", accept: "text/html",
+		},
+		{
+			name: "encoded dot", method: http.MethodGet,
+			path: "/alice/my-project%2egit", accept: "text/html",
+		},
+		{
+			name: "encoded separator", method: http.MethodGet,
+			path: "/alice/my-project%2fmain", accept: "text/html",
+		},
+		{
+			name: "double slash", method: http.MethodGet,
+			path: "/alice//my-project", accept: "text/html",
+		},
+		{
+			name: "traversal", method: http.MethodGet,
+			path: "/alice/../my-project", accept: "text/html",
+		},
+		{
+			name: "invalid namespace", method: http.MethodGet,
+			path: "/Alice/my-project", accept: "text/html",
+		},
+		{
+			name: "reserved namespace", method: http.MethodGet,
+			path: "/system/my-project", accept: "text/html",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			request := httptest.NewRequest(tt.method, tt.path, nil)
+			request.Header.Set("Accept", tt.accept)
+			request.Header.Set("Cookie", "session=opaque")
+			response := httptest.NewRecorder()
+			testHandler(t, testFiles()).ServeHTTP(response, request)
+			if !tt.shell {
+				if response.Code != http.StatusTeapot || response.Header().Get("X-Next-Cookie") != "session=opaque" {
+					t.Fatalf("request was intercepted: %d %s", response.Code, response.Body.String())
+				}
+				return
+			}
+			if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+				t.Fatalf("expected HTML shell, got %d %s", response.Code, response.Body.String())
+			}
+			if response.Header().Get("Cache-Control") != "no-store" {
+				t.Error("repository HTML must not be cached")
+			}
+			if tt.method == http.MethodHead && response.Body.Len() != 0 {
+				t.Error("HEAD returned a body")
 			}
 			assertSecurityHeaders(t, response)
 		})
