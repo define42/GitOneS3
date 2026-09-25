@@ -178,8 +178,7 @@ func (s *Service) serveGit(w http.ResponseWriter, r *http.Request, namespace str
 
 func gitAuthError(w http.ResponseWriter, err error) {
 	status, message := http.StatusServiceUnavailable, "authentication unavailable"
-	var apiErr huma.StatusError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[huma.StatusError](err); ok {
 		status, message = apiErr.GetStatus(), apiErr.Error()
 	}
 	if status == http.StatusUnauthorized {

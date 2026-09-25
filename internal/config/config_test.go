@@ -15,6 +15,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	want := Config{
+		SSH:                 SSH{Port: 2222},
 		ShardCount:          256,
 		LocalShard:          173,
 		ListenAddress:       DefaultListenAddress,

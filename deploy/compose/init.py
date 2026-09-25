@@ -65,6 +65,19 @@ def main():
     write(realm_dir / "gitone-realm.json", json.dumps(realm, indent=2) + "\n", 0o644)
 
     tls = root / "tls"
+
+    # Stable across restarts. Keep host identity and peer authentication distinct.
+    ssh = root / "ssh"
+    ssh.mkdir(exist_ok=True)
+    ssh.chmod(0o755)
+    for name in ("host_key", "forward_key"):
+        key = ssh / name
+        if not key.exists():
+            openssl("genpkey", "-algorithm", "ED25519", "-out", str(key))
+        # The parent /local is 0700 on the host. The read-only container mount
+        # must also be readable by GitOne's distinct non-root UID (65532).
+        key.chmod(0o444)
+
     tls.mkdir(exist_ok=True)
     tls.chmod(0o755)
     ca_key, ca_cert = tls / "ca.key", tls / "ca.crt"

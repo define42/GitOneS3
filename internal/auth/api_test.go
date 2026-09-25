@@ -348,7 +348,7 @@ func TestAPIOpenAPIAndCrossShardForwarding(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &document); err != nil {
 		t.Fatal(err)
 	}
-	if w.Code != 200 || document.OpenAPI != "3.1.0" || len(document.Paths) != 19 {
+	if w.Code != 200 || document.OpenAPI != "3.1.0" || len(document.Paths) != 21 {
 		t.Fatalf("invalid API specification: status=%d, paths=%d, openapi=%s", w.Code, len(document.Paths), document.OpenAPI)
 	}
 	if !strings.Contains(string(document.Paths["/api/v1/groups/{name}/invitations"]), `"security"`) {
@@ -356,7 +356,8 @@ func TestAPIOpenAPIAndCrossShardForwarding(t *testing.T) {
 	}
 	for _, path := range []string{"/api/v1/repos/{namespace}", "/api/v1/repos/{namespace}/{repository}",
 		"/api/v1/repos/{namespace}/{repository}/branches", "/api/v1/repos/{namespace}/{repository}/tree",
-		"/api/v1/repos/{namespace}/{repository}/blob", "/api/v1/repos/{namespace}/{repository}/commits"} {
+		"/api/v1/repos/{namespace}/{repository}/blob", "/api/v1/repos/{namespace}/{repository}/commits",
+		"/api/v1/users/{name}/ssh-keys", "/api/v1/users/{name}/ssh-keys/{id}"} {
 		if !strings.Contains(string(document.Paths[path]), `"security"`) {
 			t.Fatalf("missing authenticated repository operation: %s", path)
 		}

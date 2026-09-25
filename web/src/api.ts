@@ -7,6 +7,7 @@ export interface Session {
   csrfToken?: string;
   shardCount: number;
   provider: string;
+  sshURL?: string;
 }
 export interface Space {
   name: string;
@@ -86,6 +87,14 @@ export interface AccessToken {
 export interface CreatedAccessToken {
   token: string;
   metadata: AccessToken;
+}
+export interface SSHKey {
+  id: string;
+  name: string;
+  publicKey: string;
+  fingerprint: string;
+  createdAt: string;
+  revokedAt?: string;
 }
 export class APIError extends Error {
   status: number;
@@ -170,7 +179,7 @@ export function safeReturnTo(value: string | null): string {
         params.getAll(key).length === 1 &&
         !/[\\\u0000-\u001f\u007f]/.test(entry),
     );
-  if (["/", "/auth/new-group", "/auth/tokens"].includes(path))
+  if (["/", "/auth/new-group", "/auth/tokens", "/auth/ssh-keys"].includes(path))
     return query ? "/" : value;
   if (path === "/auth/new-repository")
     return validQuery(["namespace"]) &&

@@ -69,12 +69,10 @@ func TestRepositoryStore_ConcurrentCompareAndSwap(t *testing.T) {
 	results := make(chan error, 2)
 	var wait sync.WaitGroup
 	for range 2 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			results <- store.CompareAndSwapState(ctx, "repo-1", version, testState(2))
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()

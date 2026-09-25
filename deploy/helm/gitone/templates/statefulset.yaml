@@ -66,7 +66,24 @@ spec:
             - name: public
               containerPort: {{ .Values.service.publicPort }}
               protocol: TCP
+            {{- if .Values.ssh.enabled }}
+            - name: ssh
+              containerPort: {{ .Values.ssh.port }}
+              protocol: TCP
+            {{- end }}
           env:
+            - name: GITONE_SSH_ENABLED
+              value: {{ .Values.ssh.enabled | quote }}
+            {{- if .Values.ssh.enabled }}
+            - name: GITONE_SSH_PORT
+              value: {{ .Values.ssh.port | quote }}
+            - name: GITONE_SSH_PUBLIC_URL
+              value: {{ .Values.ssh.publicURL | quote }}
+            - name: GITONE_SSH_HOST_KEY_FILE
+              value: /etc/gitone/ssh/host-key
+            - name: GITONE_SSH_FORWARD_KEY_FILE
+              value: /etc/gitone/ssh/forward-key
+            {{- end }}
             - name: GITONE_AUTH_ENABLED
               value: {{ .Values.auth.enabled | quote }}
             {{- if .Values.auth.enabled }}
@@ -157,6 +174,11 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
+            {{- if .Values.ssh.enabled }}
+            - name: ssh-keys
+              mountPath: /etc/gitone/ssh
+              readOnly: true
+            {{- end }}
             - name: cluster-identity
               mountPath: {{ .Values.clusterIdentity.mountPath }}
               readOnly: true
@@ -165,6 +187,17 @@ spec:
             - name: workspace
               mountPath: /var/lib/gitone/work
       volumes:
+        {{- if .Values.ssh.enabled }}
+        - name: ssh-keys
+          secret:
+            secretName: {{ required "ssh.existingSecret is required when SSH is enabled" .Values.ssh.existingSecret }}
+            defaultMode: 0440
+            items:
+              - key: host-key
+                path: host-key
+              - key: forward-key
+                path: forward-key
+        {{- end }}
         - name: cluster-identity
           configMap:
             name: gitone-cluster-identity

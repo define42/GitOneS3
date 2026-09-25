@@ -53,6 +53,8 @@ func TestHandlerServeHTTP(t *testing.T) {
 		{name: "register", method: http.MethodGet, path: "/auth/register", accept: "text/html", shell: true},
 		{name: "new group", method: http.MethodGet, path: "/auth/new-group", accept: "text/html", shell: true},
 		{name: "token management", method: http.MethodGet, path: "/auth/tokens", accept: "text/html", shell: true},
+		{name: "SSH key management", method: http.MethodGet, path: "/auth/ssh-keys", accept: "text/html", shell: true},
+		{name: "SSH key management json", method: http.MethodGet, path: "/auth/ssh-keys", accept: "application/json"},
 		{name: "token management head", method: http.MethodHead, path: "/auth/tokens", accept: "text/html", shell: true},
 		{name: "token management json", method: http.MethodGet, path: "/auth/tokens", accept: "application/json"},
 		{name: "token management post", method: http.MethodPost, path: "/auth/tokens", accept: "text/html"},

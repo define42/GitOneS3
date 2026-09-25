@@ -4,6 +4,7 @@ import { api, errorMessage, safeReturnTo, validName } from "./api";
 import type { Group, Role, Session, Space } from "./api";
 import { NewRepository, RepositoryList, RepositoryPage } from "./Repositories";
 import { TokensPage } from "./Tokens";
+import { SSHKeysPage } from "./SSHKeys";
 
 function Icon({
   name = "branch",
@@ -1173,6 +1174,8 @@ export function App() {
   else if (path === "/auth/new-repository")
     content = <NewRepository session={session} />;
   else if (path === "/auth/tokens") content = <TokensPage session={session} />;
+  else if (path === "/auth/ssh-keys")
+    content = <SSHKeysPage session={session} />;
   else {
     const [, name, subpath, action] = path.split("/");
     content =

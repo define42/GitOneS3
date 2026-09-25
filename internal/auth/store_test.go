@@ -17,16 +17,14 @@ func TestUserBindingIsPermanentAndAtomic(t *testing.T) {
 	var successes atomic.Int32
 	var wg sync.WaitGroup
 	for _, id := range []string{"google-a", "google-b"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			err := s.bindUser(context.Background(), "alice", Identity{Subject: id, Email: "same@example.com"})
 			if err == nil {
 				successes.Add(1)
 			} else if !errors.Is(err, errUsernameTaken) {
 				t.Errorf("bind: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if successes.Load() != 1 {

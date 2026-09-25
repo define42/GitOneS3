@@ -40,7 +40,10 @@ func TestNativeGitLifecycle(t *testing.T) {
 	root := t.TempDir()
 	run := func(dir string, args ...string) string {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-c", "user.name=Alice", "-c", "user.email=alice@example.test"}, args...)...)
+		// #nosec G204 -- The test supplies fixed Git arguments directly, without a shell or user input.
+		cmd := exec.CommandContext(t.Context(), "git", append([]string{
+			"-c", "user.name=Alice", "-c", "user.email=alice@example.test",
+		}, args...)...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
 		output, err := cmd.CombinedOutput()

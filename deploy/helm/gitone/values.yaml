@@ -25,6 +25,14 @@ service:
 
 listenAddress: 0.0.0.0
 
+ssh:
+  enabled: false
+  port: 2222
+  servicePort: 22
+  publicURL: ""
+  # Shared across shards, with distinct Ed25519 private keys host-key and forward-key.
+  existingSecret: ""
+
 auth:
   enabled: false
   # HTTPS origin, without a trailing slash.

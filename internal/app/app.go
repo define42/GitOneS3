@@ -22,6 +22,7 @@ import (
 	"github.com/define42/GitOneS3/internal/proxy"
 	"github.com/define42/GitOneS3/internal/repository"
 	"github.com/define42/GitOneS3/internal/shard"
+	"github.com/define42/GitOneS3/internal/sshserver"
 	"github.com/define42/GitOneS3/internal/storage/s3store"
 	"github.com/define42/GitOneS3/internal/webui"
 )
@@ -29,6 +30,7 @@ import (
 // App owns the HTTP listener and forwarding transport for one shard.
 type App struct {
 	server           *httpserver.Server
+	sshServer        *sshserver.Server
 	forwardTransport *http.Transport
 }
 
@@ -95,6 +97,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	}
 	var ownerHandler http.Handler = protocol.NewHandler(nil, nil)
 	var requestRouter proxy.Router = router
+	var sshServer *sshserver.Server
 	if cfg.Auth.Enabled {
 		repositories, err := repository.New(objectStore)
 		if err != nil {
@@ -113,12 +116,38 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 			Config: cfg.Auth, LocalShard: shard.ShardID(cfg.LocalShard),
 			Router: router, Store: objectStore, Provider: provider, Next: ownerHandler,
 			TokenResolver: destinationResolver, TokenTransport: forwardTransport,
+			SSHPublicURL: cfg.SSH.PublicURL,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create authentication handler: %w", err)
 		}
 		ownerHandler = authHandler
 		requestRouter = authHandler
+		if cfg.SSH.Enabled {
+			hostKey, err := sshserver.LoadSigner(cfg.SSH.HostKeyFile)
+			if err != nil {
+				return nil, fmt.Errorf("load SSH host key: %w", err)
+			}
+			forwardKey, err := sshserver.LoadSigner(cfg.SSH.ForwardKeyFile)
+			if err != nil {
+				return nil, fmt.Errorf("load SSH forwarding key: %w", err)
+			}
+			sshServer, err = sshserver.New(sshserver.Options{
+				Address:    listenAddress(cfg.ListenAddress, cfg.SSH.Port),
+				LocalShard: shard.ShardID(cfg.LocalShard), Router: router,
+				HostKey: hostKey, ForwardKey: forwardKey, Authority: authHandler, Git: gitHandler, Logger: logger,
+				PeerAddress: func(id shard.ShardID) (string, error) {
+					destination, err := destinationResolver.Resolve(id)
+					if err != nil {
+						return "", err
+					}
+					return listenAddress(destination.Hostname(), cfg.SSH.Port), nil
+				},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("create SSH server: %w", err)
+			}
+		}
 	}
 	routingHandler, err := proxy.NewHandler(proxy.HandlerOptions{
 		LocalShard: shard.ShardID(cfg.LocalShard),
@@ -149,13 +178,23 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		return nil, fmt.Errorf("create HTTP server: %w", err)
 	}
 
-	return &App{server: server, forwardTransport: forwardTransport}, nil
+	return &App{server: server, sshServer: sshServer, forwardTransport: forwardTransport}, nil
 }
 
 // Run serves until context cancellation or a listener error.
 func (a *App) Run(ctx context.Context) error {
 	defer a.forwardTransport.CloseIdleConnections()
-	return a.server.Run(ctx)
+	if a.sshServer == nil {
+		return a.server.Run(ctx)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan error, 2)
+	go func() { results <- a.server.Run(ctx) }()
+	go func() { results <- a.sshServer.Run(ctx) }()
+	first := <-results
+	cancel()
+	return errors.Join(first, <-results)
 }
 
 func listenAddress(host string, port uint16) string {

@@ -13,6 +13,11 @@ x-gitone: &gitone
     GITONE_SHARD_COUNT: "4"
     POD_NAMESPACE: local
     GITONE_AUTH_ENABLED: "true"
+    GITONE_SSH_ENABLED: "true"
+    GITONE_SSH_PORT: "2222"
+    GITONE_SSH_PUBLIC_URL: ssh://gitone.localhost:2222
+    GITONE_SSH_HOST_KEY_FILE: /etc/gitone/ssh/host_key
+    GITONE_SSH_FORWARD_KEY_FILE: /etc/gitone/ssh/forward_key
     GITONE_PUBLIC_URL: https://gitone.localhost:8443
     GITONE_OIDC_ISSUER: https://keycloak.gitone.localhost:8443/realms/gitone
     GITONE_OIDC_CLIENT_ID: gitone
@@ -26,6 +31,7 @@ x-gitone: &gitone
   volumes:
     - ./deploy/compose/cluster-identity.json:/etc/gitone/identity/cluster-identity.json:ro
     - ./.local/tls/ca.crt:/etc/gitone/tls/ca.crt:ro
+    - ./.local/ssh:/etc/gitone/ssh:ro
   depends_on:
     minio-init:
       condition: service_completed_successfully
@@ -131,6 +137,8 @@ services:
 
   gitone-0:
     <<: *gitone
+    ports:
+      - "127.0.0.1:2222:2222"
     environment:
       <<: *gitone-env
       POD_NAME: gitone-0

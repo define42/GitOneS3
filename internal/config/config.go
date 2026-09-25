@@ -55,6 +55,7 @@ type Config struct {
 	Pack                PackPolicy
 	Path                PathPolicy
 	Auth                Auth
+	SSH                 SSH
 }
 
 // S3 configures the shard-local S3-compatible object store. Bucket is derived
@@ -183,8 +184,13 @@ func Load(lookup LookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	ssh, err := loadSSH(lookup)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		Auth:                auth,
+		SSH:                 ssh,
 		ShardCount:          shardCount,
 		LocalShard:          localShard,
 		ListenAddress:       value(lookup, "GITONE_LISTEN_ADDRESS", DefaultListenAddress),
@@ -229,6 +235,9 @@ func Load(lookup LookupEnv) (Config, error) {
 
 // Validate checks invariants that must hold before the process accepts traffic.
 func (c Config) Validate() error {
+	if err := c.SSH.validate(c.Auth.Enabled, c.PublicPort); err != nil {
+		return err
+	}
 	if err := c.Auth.Validate(); err != nil {
 		return err
 	}

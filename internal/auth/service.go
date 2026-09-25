@@ -80,6 +80,7 @@ type Options struct {
 	Next           http.Handler
 	TokenResolver  TokenResolver
 	TokenTransport http.RoundTripper
+	SSHPublicURL   string
 }
 
 // Service resolves callback state on any pod and authenticates on the owner.
@@ -98,6 +99,7 @@ type Service struct {
 	api           http.Handler
 	tokenResolver TokenResolver
 	tokenClient   *http.Client
+	sshPublicURL  string
 }
 
 func New(options Options) (*Service, error) {
@@ -123,6 +125,7 @@ func New(options Options) (*Service, error) {
 		repositories: repositories,
 		provider:     options.Provider, next: options.Next, origin: options.Config.PublicURL,
 		tokenResolver: options.TokenResolver,
+		sshPublicURL:  options.SSHPublicURL,
 		tokenClient: &http.Client{Transport: options.TokenTransport, Timeout: 5 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		issuer: options.Config.IssuerURL(), callbackPath: options.Config.CallbackPath(),
@@ -480,7 +483,7 @@ func (s *Service) validReturnTo(target string) bool {
 		}
 		return true
 	}
-	if u.Path == "/" || u.Path == "/auth/new-group" || u.Path == "/auth/tokens" {
+	if u.Path == "/" || u.Path == "/auth/new-group" || u.Path == "/auth/tokens" || u.Path == "/auth/ssh-keys" {
 		return len(query) == 0
 	}
 	parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(u.Path, "/"), "/"), "/")

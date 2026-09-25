@@ -115,7 +115,8 @@ Do not paste tokens into remote URLs, command-line arguments, source files,
 shell history, or diagnostic logs. The UI never adds a token to the clone URL
 or stores it in browser local/session storage. Copying a token puts it in the
 system clipboard; clear it when finished. GitOne does not currently provide
-an OAuth credential-helper/device-login flow or SSH authentication.
+an OAuth credential-helper/device-login flow. [SSH public-key authentication](git-ssh.md)
+is also available when enabled by the operator.
 
 For the local Compose certificate, follow the
 [explicit CA trust instructions](../deploy/compose/README.md#local-https).
@@ -163,7 +164,7 @@ response, so a successful HTTP status alone does not mean a push was accepted.
 
 ## Current transport limits
 
-The implementation is a bounded Git Smart HTTP protocol-v0 engine using SHA-1
+The implementation is a bounded Git protocol-v0 engine with Smart HTTP and SSH adapters, using SHA-1
 Git objects. It validates incoming packs, object connectivity, and expected old
 refs, then publishes all ref changes in one S3 compare-and-swap. No local bare
 repository, Git subprocess, server hook, or local Git config is authoritative.
@@ -189,7 +190,7 @@ names, and commit/tag text to UTF-8; commit author/committer names are bounded
 to 254 bytes. Unpublished objects from rejected or competing pushes can remain
 in S3; automatic garbage collection is not implemented.
 Shallow/partial clones, Git protocol v2, SHA-256 repositories, LFS, server hooks,
-branch-protection policy, and SSH are not implemented. LFS routes return `501`.
+and branch-protection policy are not implemented. LFS routes return `501`.
 Browser file editing and repository rename/delete operations remain unavailable.
 
 ## Native-client integration tests

@@ -1,4 +1,4 @@
-// Package gittransport serves bounded Git Smart HTTP protocol v0 from S3-backed
+// Package gittransport serves bounded Git HTTP and SSH protocol v0 from S3-backed
 // generations. It has no local working tree, hooks, subprocesses, or Git config.
 package gittransport
 
@@ -188,7 +188,7 @@ func parseRoute(r *http.Request) (namespace, name, service string, advertise boo
 
 func pkt(data string) string { return fmt.Sprintf("%04x%s", len(data)+4, data) }
 
-func readPkt(r *bytes.Reader) ([]byte, bool, error) {
+func readPkt(r io.Reader) ([]byte, bool, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, false, err
@@ -205,7 +205,7 @@ func readPkt(r *bytes.Reader) ([]byte, bool, error) {
 	if n == 0 {
 		return nil, true, nil
 	}
-	if n < 4 || n > 65520 || int(n)-4 > r.Len() {
+	if n < 4 || n > 65520 {
 		return nil, false, errPack
 	}
 	data := make([]byte, int(n)-4)
@@ -216,6 +216,11 @@ func readPkt(r *bytes.Reader) ([]byte, bool, error) {
 }
 
 func advertisement(snap *repository.GitSnapshot, service string) []byte {
+	prefix := []byte(pkt("# service="+service+"\n") + "0000")
+	return append(prefix, referenceAdvertisement(snap, service)...)
+}
+
+func referenceAdvertisement(snap *repository.GitSnapshot, service string) []byte {
 	caps := "ofs-delta side-band-64k no-progress"
 	if service == receive {
 		caps = "report-status delete-refs ofs-delta atomic"
@@ -228,8 +233,6 @@ func advertisement(snap *repository.GitSnapshot, service string) []byte {
 	}
 	slices.Sort(refs)
 	var out strings.Builder
-	out.WriteString(pkt("# service=" + service + "\n"))
-	out.WriteString("0000")
 	first := true
 	add := func(id, ref string) {
 		line := id + " " + ref
@@ -343,6 +346,40 @@ func (h *Handler) upload(ctx context.Context, snap *repository.GitSnapshot, body
 
 func (h *Handler) receive(ctx context.Context, snap *repository.GitSnapshot, body []byte) ([]byte, error) {
 	r := bytes.NewReader(body)
+	updates, err := receiveCommands(r)
+	if err != nil {
+		return nil, err
+	}
+	incoming := map[string]repository.GitObject{}
+	if r.Len() > 0 {
+		incoming, err = decodePack(ctx, body[len(body)-r.Len():], snap.Objects)
+		if err != nil {
+			//lint:ignore nilerr Git reports unpack failures in report-status, not as an HTTP transport error.
+			return receiveStatus(updates, "invalid pack", "unpack failed"), nil
+		}
+	}
+	authorize, _ := ctx.Value(writeAuthorizationKey{}).(func(context.Context) error)
+	err = h.store.PublishGit(ctx, snap, updates, incoming, authorize)
+	if err != nil {
+		reason := "repository update failed"
+		if errors.Is(err, repository.ErrConflict) {
+			reason = "stale reference; fetch and retry"
+		}
+		if errors.Is(err, repository.ErrForbidden) {
+			reason = "write permission revoked or expired"
+		}
+		if errors.Is(err, repository.ErrInvalid) {
+			reason = "invalid reference or missing object"
+		}
+		if errors.Is(err, repository.ErrLimit) {
+			reason = "repository exceeds limits"
+		}
+		return receiveStatus(updates, "ok", reason), nil
+	}
+	return receiveStatus(updates, "ok", ""), nil
+}
+
+func receiveCommands(r io.Reader) ([]repository.RefUpdate, error) {
 	updates := []repository.RefUpdate{}
 	first := true
 	for {
@@ -380,34 +417,7 @@ func (h *Handler) receive(ctx context.Context, snap *repository.GitSnapshot, bod
 	if len(updates) == 0 {
 		return nil, errPack
 	}
-	incoming := map[string]repository.GitObject{}
-	if r.Len() > 0 {
-		var err error
-		incoming, err = decodePack(ctx, body[len(body)-r.Len():], snap.Objects)
-		if err != nil {
-			//lint:ignore nilerr Git reports unpack failures in report-status, not as an HTTP transport error.
-			return receiveStatus(updates, "invalid pack", "unpack failed"), nil
-		}
-	}
-	authorize, _ := ctx.Value(writeAuthorizationKey{}).(func(context.Context) error)
-	err := h.store.PublishGit(ctx, snap, updates, incoming, authorize)
-	if err != nil {
-		reason := "repository update failed"
-		if errors.Is(err, repository.ErrConflict) {
-			reason = "stale reference; fetch and retry"
-		}
-		if errors.Is(err, repository.ErrForbidden) {
-			reason = "write permission revoked or expired"
-		}
-		if errors.Is(err, repository.ErrInvalid) {
-			reason = "invalid reference or missing object"
-		}
-		if errors.Is(err, repository.ErrLimit) {
-			reason = "repository exceeds limits"
-		}
-		return receiveStatus(updates, "ok", reason), nil
-	}
-	return receiveStatus(updates, "ok", ""), nil
+	return updates, nil
 }
 
 func receiveStatus(updates []repository.RefUpdate, unpack, reason string) []byte {
@@ -437,6 +447,7 @@ func validID(id string) bool {
 }
 
 func writeBytes(w http.ResponseWriter, data []byte) {
+	// #nosec G705 -- Both callers set Git's binary media type and nosniff; this response is never HTML.
 	if _, err := w.Write(data); err != nil {
 		return
 	}

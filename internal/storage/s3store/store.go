@@ -368,8 +368,7 @@ func classifyError(operation, key string, err error) error {
 		return fmt.Errorf("%s %q: %w", operation, key, storage.ErrPreconditionFailed)
 	}
 
-	var apiError smithy.APIError
-	if errors.As(err, &apiError) {
+	if apiError, ok := errors.AsType[smithy.APIError](err); ok {
 		switch apiError.ErrorCode() {
 		case "NoSuchKey", "NotFound", "NoSuchBucket":
 			return fmt.Errorf("%s %q: %w", operation, key, storage.ErrNotFound)
@@ -419,8 +418,7 @@ func isAlreadyExists(err error) bool {
 }
 
 func statusCode(err error) int {
-	var responseError *awshttp.ResponseError
-	if errors.As(err, &responseError) {
+	if responseError, ok := errors.AsType[*awshttp.ResponseError](err); ok {
 		return responseError.HTTPStatusCode()
 	}
 

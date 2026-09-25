@@ -189,12 +189,10 @@ func TestCreateRace(t *testing.T) {
 	results := make(chan error, writers)
 	var workers sync.WaitGroup
 	for range writers {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			_, err := store.Create(ctx, "alice", createInput("race", true))
 			results <- err
-		}()
+		})
 	}
 	workers.Wait()
 	close(results)

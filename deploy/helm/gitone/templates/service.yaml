@@ -17,3 +17,9 @@ spec:
       protocol: TCP
       port: {{ .Values.service.publicPort }}
       targetPort: public
+    {{- if .Values.ssh.enabled }}
+    - name: ssh
+      protocol: TCP
+      port: {{ .Values.ssh.servicePort }}
+      targetPort: ssh
+    {{- end }}

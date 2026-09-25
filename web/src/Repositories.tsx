@@ -387,7 +387,10 @@ export function NewRepository({ session }: { session: Session }) {
               </span>
             </label>
             <p className="field-help">
-              Clone and push over HTTPS using a personal access token.
+              Clone and push over HTTPS using a personal access token
+              {session.sshURL
+                ? ", or over SSH using a registered public key."
+                : "."}
             </p>
             {error && (
               <div id="repository-error" ref={errorSummary} tabIndex={-1}>
@@ -421,16 +424,49 @@ function shellQuote(value: string) {
   return "'" + value.replace(/'/g, "'\\''") + "'";
 }
 
+type CloneProtocol = "HTTPS" | "SSH";
+
+function sshCloneURL(repository: Repository, session: Session): string {
+  if (!session.sshURL || !session.username) return "";
+  try {
+    const url = new URL(session.sshURL);
+    if (url.protocol !== "ssh:") return "";
+    url.username = session.username;
+    url.password = "";
+    url.pathname = `/${repository.namespace}/${repository.name}.git`;
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function repositoryCloneURL(
+  repository: Repository,
+  session: Session,
+  protocol: CloneProtocol,
+) {
+  return (
+    (protocol === "SSH" && sshCloneURL(repository, session)) ||
+    `${location.origin}/${repository.namespace}/${repository.name}.git`
+  );
+}
+
 function ClonePanel({
   repository,
-  username,
+  session,
+  protocol,
+  onProtocolChange,
   expanded = false,
 }: {
   repository: Repository;
-  username: string;
+  session: Session;
+  protocol: CloneProtocol;
+  onProtocolChange: (value: CloneProtocol) => void;
   expanded?: boolean;
 }) {
-  const cloneURL = `${location.origin}/${repository.namespace}/${repository.name}.git`;
+  const cloneURL = repositoryCloneURL(repository, session, protocol);
   const [status, setStatus] = useState("");
   async function copyURL() {
     try {
@@ -444,9 +480,31 @@ function ClonePanel({
   }
   return (
     <details className="panel clone-panel" open={expanded || undefined}>
-      <summary>Clone with HTTPS</summary>
+      <summary>Clone with {protocol}</summary>
       <div className="clone-content">
-        <label htmlFor="repository-clone-url">HTTPS clone URL</label>
+        {sshCloneURL(repository, session) && (
+          <div
+            className="clone-protocol"
+            role="group"
+            aria-label="Clone protocol"
+          >
+            {(["HTTPS", "SSH"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                className="button"
+                aria-pressed={protocol === value}
+                onClick={() => {
+                  onProtocolChange(value);
+                  setStatus("");
+                }}
+              >
+                {value}
+              </button>
+            ))}
+          </div>
+        )}
+        <label htmlFor="repository-clone-url">{protocol} clone URL</label>
         <div className="copy-field">
           <input
             id="repository-clone-url"
@@ -464,14 +522,24 @@ function ClonePanel({
           </p>
         )}
         <pre tabIndex={0}>{`git clone ${shellQuote(cloneURL)}`}</pre>
-        <p className="field-help">
-          When Git asks for credentials, use your personal username{" "}
-          <strong>{username}</strong> and an{" "}
-          <a href="/auth/tokens">access token</a> as the password. Select this
-          repository when generating the token, or explicitly choose all
-          repositories you have access to. Use read permission for clone/pull,
-          or write permission for push.
-        </p>
+        {protocol === "SSH" ? (
+          <p className="field-help">
+            <a href="/auth/ssh-keys">Add your public SSH key</a> in personal
+            settings first. Use your GitOne username{" "}
+            <strong>{session.username}</strong>, not “git” or the group name.
+            Your current repository permissions apply. Keep the private key on
+            your device.
+          </p>
+        ) : (
+          <p className="field-help">
+            When Git asks for credentials, use your personal username{" "}
+            <strong>{session.username}</strong> and an{" "}
+            <a href="/auth/tokens">access token</a> as the password. Select this
+            repository when generating the token, or explicitly choose all
+            repositories you have access to. Use read permission for clone/pull,
+            or write permission for push.
+          </p>
+        )}
       </div>
     </details>
   );
@@ -479,12 +547,16 @@ function ClonePanel({
 
 function EmptyRepository({
   repository,
-  username,
+  session,
+  protocol,
+  onProtocolChange,
 }: {
   repository: Repository;
-  username: string;
+  session: Session;
+  protocol: CloneProtocol;
+  onProtocolChange: (value: CloneProtocol) => void;
 }) {
-  const cloneURL = `${location.origin}/${repository.namespace}/${repository.name}.git`;
+  const cloneURL = repositoryCloneURL(repository, session, protocol);
   const branch = shellQuote(repository.defaultBranch);
   const createCommands = [
     `mkdir ${shellQuote(repository.name)}`,
@@ -506,10 +578,16 @@ function EmptyRepository({
         <p>
           {repository.canWrite
             ? "Push your first commit from Git to add files, branches, and history."
-            : "An owner or developer can push the first commit. You can clone this repository with a read token."}
+            : "An owner or developer can push the first commit. You can clone this repository with your Git credentials."}
         </p>
       </div>
-      <ClonePanel repository={repository} username={username} expanded />
+      <ClonePanel
+        repository={repository}
+        session={session}
+        protocol={protocol}
+        onProtocolChange={onProtocolChange}
+        expanded
+      />
       {repository.canWrite && (
         <section
           className="panel git-quickstart"
@@ -531,7 +609,9 @@ function EmptyRepository({
             tabIndex={0}
           >{`git remote add origin ${shellQuote(cloneURL)}\ngit push -u origin HEAD`}</pre>
           <p className="field-help">
-            Use a write token for{" "}
+            {protocol === "SSH"
+              ? "Use a registered SSH key for "
+              : "Use a write token for "}
             <code>
               {repository.namespace}/{repository.name}
             </code>
@@ -557,6 +637,7 @@ export function RepositoryPage({
   const [data, setData] = useState<BrowserData | null>(null);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [cloneProtocol, setCloneProtocol] = useState<CloneProtocol>("HTTPS");
   const query = new URLSearchParams(location.search);
   const selectedRef = query.get("ref") ?? repository?.defaultBranch ?? "main";
   const path = query.get("path") ?? "";
@@ -693,10 +774,20 @@ export function RepositoryPage({
       ) : !repository || !data ? (
         <Loading text="Loading repository…" />
       ) : repository.empty ? (
-        <EmptyRepository repository={repository} username={session.username!} />
+        <EmptyRepository
+          repository={repository}
+          session={session}
+          protocol={cloneProtocol}
+          onProtocolChange={setCloneProtocol}
+        />
       ) : (
         <>
-          <ClonePanel repository={repository} username={session.username!} />
+          <ClonePanel
+            repository={repository}
+            session={session}
+            protocol={cloneProtocol}
+            onProtocolChange={setCloneProtocol}
+          />
           <div className="repository-toolbar">
             <div className="branch-control">
               <label htmlFor="repository-branch">Branch</label>
@@ -842,8 +933,15 @@ export function RepositoryPage({
             {repository.canWrite
               ? "You have write access to this space."
               : "You have read-only access to this space."}{" "}
-            Clone over HTTPS with a repository-scoped{" "}
-            <a href="/auth/tokens">access token</a>.
+            Clone over HTTPS with an <a href="/auth/tokens">access token</a>
+            {session.sshURL ? (
+              <>
+                {" "}
+                or over SSH with a <a href="/auth/ssh-keys">registered key</a>.
+              </>
+            ) : (
+              "."
+            )}
           </p>
         </>
       )}

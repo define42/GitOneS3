@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type { FormEvent } from "react";
 import { api, errorMessage } from "./api";
+import { SettingsNavigation } from "./SettingsNavigation";
 import type {
   AccessToken,
   CreatedAccessToken,
@@ -374,15 +375,7 @@ export function TokensPage({ session }: { session: Session }) {
       </div>
       <div className="settings-layout">
         <aside className="settings-aside">
-          <nav aria-label="Personal settings">
-            <a
-              className="side-link active"
-              href="/auth/tokens"
-              aria-current="page"
-            >
-              Access tokens
-            </a>
-          </nav>
+          <SettingsNavigation active="tokens" />
           <div className="role-guide">
             <h2>Keep access narrow</h2>
             <p>

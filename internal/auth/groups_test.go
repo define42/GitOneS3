@@ -196,9 +196,7 @@ func TestSharedNamespaceClaimsAreAtomicAndLegacyCompatible(t *testing.T) {
 				var successes atomic.Int32
 				var wg sync.WaitGroup
 				for i := range 16 {
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
+					wg.Go(func() {
 						var err error
 						if i%2 == 0 {
 							err = s.bindUser(ctx, "alice", Identity{Subject: fmt.Sprintf("user-%d", i)})
@@ -210,7 +208,7 @@ func TestSharedNamespaceClaimsAreAtomicAndLegacyCompatible(t *testing.T) {
 						} else if !errors.Is(err, errUsernameTaken) && !errors.Is(err, errNamespaceTaken) {
 							t.Errorf("unexpected claim error: %v", err)
 						}
-					}()
+					})
 				}
 				wg.Wait()
 				if successes.Load() != 1 {
@@ -302,16 +300,14 @@ func TestConcurrentOwnerRemovalKeepsOneOwner(t *testing.T) {
 	var successes atomic.Int32
 	var wg sync.WaitGroup
 	for _, caller := range []string{"google:a", "google:b"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := s.updateGroup(ctx, "acme", caller, "remove", caller, "")
 			if err == nil {
 				successes.Add(1)
 			} else if !errors.Is(err, errLastOwner) {
 				t.Errorf("unexpected error: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	remaining, _, err := s.loadNamespace(ctx, "acme")
@@ -393,13 +389,11 @@ func TestConcurrentGroupInvitesDoNotLoseUpdates(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	for _, target := range []string{"google:a", "google:b"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, err := s.updateGroup(ctx, "acme", "google:owner", "invite", target, "reader"); err != nil {
 				t.Error(err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	record, _, err := s.loadNamespace(ctx, "acme")

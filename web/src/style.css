@@ -1091,6 +1091,44 @@ summary:focus-visible,
 .clone-content {
   padding: 0 18px 4px;
 }
+.clone-protocol {
+  display: flex;
+  gap: 8px;
+  margin-block: 4px 18px;
+}
+.clone-protocol [aria-pressed="true"] {
+  color: var(--blue);
+  border-color: var(--blue);
+  background: var(--subtle);
+}
+.ssh-key-form {
+  margin-bottom: 24px;
+}
+.ssh-key-form textarea {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.ssh-key-form .field-error {
+  color: var(--danger);
+  margin-block: -12px 20px;
+}
+.ssh-key-fingerprint {
+  overflow-wrap: anywhere;
+  margin-block: 12px 8px;
+}
+.ssh-key-details {
+  margin-top: 12px;
+}
+.ssh-key-details summary {
+  cursor: pointer;
+  color: var(--blue);
+}
+.ssh-key-details pre {
+  background: var(--subtle);
+  padding: 12px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .clone-content pre,
 .git-quickstart pre {
   overflow: auto;

@@ -32,6 +32,7 @@ type sessionView struct {
 	CSRF          string    `json:"csrfToken,omitempty"`
 	ShardCount    uint32    `json:"shardCount"`
 	Provider      string    `json:"provider" enum:"google,oidc"`
+	SSHURL        string    `json:"sshURL,omitempty"`
 }
 
 type sessionOutput struct {
@@ -229,6 +230,7 @@ func (s *Service) newAPIHandler() http.Handler {
 		})
 	s.registerRepositoryAPI(api)
 	s.registerTokenAPI(api)
+	s.registerSSHKeyAPI(api)
 	return mux
 }
 
@@ -255,6 +257,7 @@ func (s *Service) apiSession(ctx context.Context, _ *struct{}) (*sessionOutput, 
 		provider = "google"
 	}
 	view := sessionView{Authenticated: current.isAuthenticated, ShardCount: s.ShardCount(), Provider: provider}
+	view.SSHURL = s.sshPublicURL
 	if current.isAuthenticated {
 		view.Username = current.current.Username
 		view.Identity = &current.current.Identity

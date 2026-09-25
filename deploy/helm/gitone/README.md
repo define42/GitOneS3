@@ -70,3 +70,13 @@ The PodDisruptionBudget is off by default: with one owner pod per shard, any
 permitted disruption makes that shard unavailable. StatefulSet updates use
 `OnDelete` so operators can replace small batches and verify health between
 batches.
+## Optional SSH
+
+Enable `ssh.enabled` with `auth.enabled`, set `ssh.publicURL` to your external
+SSH origin, and provide `ssh.existingSecret` containing two distinct Ed25519
+private keys named `host-key` and `forward-key`, shared by every shard. Keys
+must persist across pod restarts. `ssh.port` defaults to 2222 inside pods and
+`ssh.servicePort` defaults to 22 on the public Service. Use a TCP load balancer;
+the HTTP ingress cannot proxy SSH. The chart opens the SSH listener in its
+NetworkPolicy and mounts the secret read-only. See
+[SSH configuration and trust model](../../../docs/git-ssh.md).

@@ -7,7 +7,7 @@ make run
 ```
 
 Requires Docker Engine/Desktop with Compose **2.24+**, Make, and free local ports
-8443, 9000 and 9001. No host Go, Python, Keycloak, MinIO, cloud account, or manual
+2222, 8443, 9000 and 9001. No host Go, Python, Keycloak, MinIO, cloud account, or manual
 bucket/realm setup is needed. The first build needs internet access and can take
 several minutes (allow about 6 GB RAM for building MinIO and running the stack).
 Later starts reuse the build cache and persistent data.
@@ -181,3 +181,10 @@ The source is AGPLv3; its license is included in the image.
 References: [Keycloak containers and realm import](https://www.keycloak.org/server/containers),
 [Keycloak reverse proxy configuration](https://www.keycloak.org/server/reverseproxy),
 [Compose readiness ordering](https://docs.docker.com/compose/how-tos/startup-order/).
+## Git-over-SSH
+
+`make run` also enables Git SSH on `localhost:2222`. Add your public key in the
+**SSH keys** settings page, create a repository, and clone using your GitOne
+username, for example `ssh://alice@localhost:2222/alice/project.git`.
+Persistent local host/peer keys live under `.local/ssh/`; do not delete these
+between restarts. See [SSH authentication and limits](../../docs/git-ssh.md).

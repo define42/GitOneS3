@@ -393,15 +393,13 @@ func TestConcurrentCallbackIsSingleUse(t *testing.T) {
 	var successes atomic.Int32
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			w := httptest.NewRecorder()
 			s.ServeHTTP(w, callbackRequest(state, browser))
 			if w.Code == http.StatusSeeOther {
 				successes.Add(1)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if successes.Load() != 1 || p.calls.Load() != 1 {

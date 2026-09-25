@@ -19,6 +19,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{- define "gitone.validateValues" -}}
+{{- if and .Values.ssh.enabled (not .Values.auth.enabled) -}}
+{{- fail "ssh.enabled requires auth.enabled" -}}
+{{- end -}}
+{{- if and .Values.ssh.enabled (or (eq (int .Values.ssh.port) (int .Values.service.publicPort)) (eq (int .Values.ssh.servicePort) (int .Values.service.publicPort))) -}}
+{{- fail "SSH listener and service ports must differ from the HTTP port" -}}
+{{- end -}}
 {{- if gt (int .Values.pack.maxSmallPackCount) (int .Values.pack.maxPackCount) -}}
 {{- fail "pack.maxSmallPackCount cannot exceed pack.maxPackCount" -}}
 {{- end -}}

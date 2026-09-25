@@ -57,6 +57,9 @@ Git/LFS client -> public Service -> any gitone-N
 - Fine-grained, expiring personal access tokens and bounded native Git Smart
   HTTP clone, fetch, pull, and push, with owner-shard token verification and
   current namespace permissions.
+- Optional Git-over-SSH clone/fetch/push, SSH public-key settings, authenticated
+  shard forwarding, and live key/namespace permission checks. See
+  [SSH setup](docs/git-ssh.md).
 - Bounded live-compaction planning that keeps large packs intact, selects only
   fragmented small packs plus the incoming pack, and queues oversized work.
 - S3-backed readiness, structured request logs, graceful HTTP
@@ -359,7 +362,7 @@ make test-ui             # Playwright against a running local Compose stack
 go test -tags=integration ./internal/auth -run '^TestGitPAT'  # requires native Git
 ```
 
-Local source builds require Go and Node.js 22.12+ with npm; `make run` builds both
+Local source builds require Go 1.26+ and Node.js 22.12+ with npm; `make run` builds both
 inside Docker and needs neither on the host. Direct Go checks remain
 `go test -race ./...` and `go vet ./...`. Run `make ui` before a direct
 `go build ./cmd/gitone` to include the interface. A Go-only build from a fresh
