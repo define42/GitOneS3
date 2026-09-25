@@ -18,6 +18,58 @@ import (
 	"github.com/define42/GitOneS3/internal/config"
 )
 
+func TestOIDCAuthorizationRequestsAccountInteraction(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name     string
+		issuer   string
+		callback string
+		prompt   string
+	}{
+		{
+			name: "Google account chooser", issuer: config.GoogleIssuer,
+			callback: CallbackPath, prompt: "select_account",
+		},
+		{
+			name: "Keycloak login", issuer: "https://keycloak.example/realms/gitone",
+			callback: "/auth/oidc/callback", prompt: "login",
+		},
+		{
+			name: "generic OIDC login", issuer: "https://identity.example",
+			callback: "/auth/oidc/callback", prompt: "login",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			provider := &OIDC{
+				issuer: test.issuer,
+				oauth: oauth2.Config{
+					ClientID: "gitone", RedirectURL: "https://git.example" + test.callback,
+					Endpoint: oauth2.Endpoint{AuthURL: "https://identity.example/authorize"},
+					Scopes:   []string{oidc.ScopeOpenID, "email"},
+				},
+			}
+			location, err := url.Parse(provider.AuthorizationURL("signed-state+&", "nonce", "verifier"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			query := location.Query()
+			for name, want := range map[string]string{
+				"prompt": test.prompt, "state": "signed-state+&", "nonce": "nonce",
+				"client_id": "gitone", "redirect_uri": provider.oauth.RedirectURL,
+				"response_type": "code", "scope": "openid email", "code_challenge_method": "S256",
+			} {
+				if values := query[name]; len(values) != 1 || values[0] != want {
+					t.Errorf("authorization parameter %s = %q, want %q", name, values, want)
+				}
+			}
+			if query.Get("code_challenge") == "" || query.Has("code_verifier") {
+				t.Fatal("authorization must include the PKCE challenge without exposing the verifier")
+			}
+		})
+	}
+}
+
 func TestOIDCExchangeVerifiesIDToken(t *testing.T) {
 	t.Parallel()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -177,6 +229,9 @@ func TestOIDCDiscoveryAndAuthorization(t *testing.T) {
 				t.Fatal(err)
 			}
 			query := location.Query()
+			if query.Get("prompt") != "login" {
+				t.Fatal("discovered OIDC provider must request interactive login")
+			}
 			if query.Get("redirect_uri") != cfg.PublicURL+"/auth/oidc/callback" ||
 				query.Get("client_id") != "gitone" || query.Get("code_challenge_method") != "S256" ||
 				query.Get("nonce") != "nonce" || query.Get("state") != "state" || query.Get("response_type") != "code" {

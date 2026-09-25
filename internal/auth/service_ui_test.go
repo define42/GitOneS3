@@ -90,7 +90,8 @@ func TestUIRegistrationRemainsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Code != http.StatusSeeOther || redirect.Path != "/auth/register" || redirect.Query().Get("error") == "" {
+	if response.Code != http.StatusSeeOther || redirect.Path != "/auth/register" ||
+		redirect.Query().Get("error") != "username is already claimed" {
 		t.Fatalf("callback = %d %s", response.Code, redirect)
 	}
 	for _, cookie := range response.Result().Cookies() {
@@ -203,9 +204,17 @@ func TestUICallbackRejectsWrongAccount(t *testing.T) {
 	if response.Code != http.StatusSeeOther || redirect.Path != "/auth/login" || redirect.Query().Get("error") == "" {
 		t.Fatalf("wrong account = %d %s", response.Code, redirect)
 	}
+	const wantError = "The selected provider account does not own this username. Try another account."
+	if redirect.Query().Get("error") != wantError || redirect.Query().Get("username") != "alice" {
+		t.Fatalf("wrong account must preserve username and explain retry: %s", redirect)
+	}
 	for _, cookie := range response.Result().Cookies() {
 		if cookie.Name == sessionCookie {
 			t.Fatal("wrong account issued a session")
 		}
+	}
+	record, _, err := s.loadNamespace(t.Context(), "alice")
+	if err != nil || record.Subject != "alice" {
+		t.Fatalf("wrong account changed namespace ownership: %+v, %v", record.Identity, err)
 	}
 }

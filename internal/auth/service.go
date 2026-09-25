@@ -420,7 +420,11 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.completeLogin(ctx, state, identity); err != nil {
 		if errors.Is(err, errUsernameTaken) {
-			s.loginError(w, r, state, "username is already claimed or belongs to another account", http.StatusConflict)
+			message := "The selected provider account does not own this username. Try another account."
+			if state.Mode == "register" {
+				message = "username is already claimed"
+			}
+			s.loginError(w, r, state, message, http.StatusConflict)
 		} else {
 			serverError(w)
 		}

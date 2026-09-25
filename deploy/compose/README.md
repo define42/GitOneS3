@@ -45,6 +45,10 @@ reader, developer, or owner; the invitee accepts from their invitations before
 gaining access. Owners can change roles and remove members, but cannot remove
 or demote the last owner. **Sign out** clears the GitOne browser session; it
 does not end Keycloak's separate SSO session.
+GitOne requests the Keycloak login screen on every sign-in and registration,
+so you can switch between Alice and Bob in the same browser after signing out.
+Choose the Keycloak account that owns the GitOne username you entered.
+If Keycloak shows the previous account, use **Restart login** to choose another.
 
 Use **New repository** to create a private repository in your personal namespace
 or a group where you are a developer or owner. Optional README initialization

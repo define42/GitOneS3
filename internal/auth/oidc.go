@@ -69,7 +69,19 @@ func newOIDC(ctx context.Context, cfg config.Auth, client *http.Client) (*OIDC, 
 }
 
 func (g *OIDC) AuthorizationURL(state, nonce, verifier string) string {
-	return g.oauth.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier))
+	// GitOne logout leaves the provider's SSO session intact. Explicit account
+	// interaction prevents that session silently signing in or registering a name
+	// with the previous user's identity. The callback still verifies ownership.
+	prompt := "login"
+	if g.issuer == config.GoogleIssuer {
+		prompt = "select_account"
+	}
+	return g.oauth.AuthCodeURL(
+		state,
+		oidc.Nonce(nonce),
+		oauth2.S256ChallengeOption(verifier),
+		oauth2.SetAuthURLParam("prompt", prompt),
+	)
 }
 
 func (g *OIDC) Exchange(ctx context.Context, code, verifier, nonce string) (Identity, error) {

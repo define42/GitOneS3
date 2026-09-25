@@ -195,24 +195,41 @@ test("register, share a group, accept, change roles, revoke access, and sign out
       expect(signedOut.authenticated).toBe(false);
       await page.goto("/auth/login");
       await page.getByLabel("Username", { exact: true }).fill(alice);
+      const authorizationRequest = page.waitForRequest(
+        (request) => {
+          const url = new URL(request.url());
+          return (
+            request.isNavigationRequest() &&
+            url.hostname.startsWith("keycloak.") &&
+            url.pathname.endsWith("/protocol/openid-connect/auth")
+          );
+        },
+        { timeout: 5_000 },
+      );
       await page.getByRole("button", { name: /continue/i }).click();
-      // The provider may resume SSO or ask for credentials again.
+      const authorizationURL = new URL((await authorizationRequest).url());
+      expect(authorizationURL.searchParams.getAll("prompt")).toEqual(["login"]);
+      await expect(page.getByLabel("Password", { exact: true })).toBeVisible({
+        timeout: 5_000,
+      });
+      const restartLogin = page.getByRole("button", {
+        name: "Restart login",
+        exact: true,
+      });
+      if (await restartLogin.isVisible()) {
+        await restartLogin.click();
+      }
       const providerUsername = page.getByLabel("Username or email", {
         exact: true,
       });
-      await Promise.race([
-        page.waitForURL(new RegExp(`/${alice}/?$`)),
-        providerUsername.waitFor(),
-      ]);
-      if (await providerUsername.isVisible()) {
-        await providerUsername.fill("alice");
-        await page
-          .getByLabel("Password", { exact: true })
-          .fill("alice-dev-password");
-        await page
-          .getByRole("button", { name: "Sign In", exact: true })
-          .click();
-      }
+      await expect(providerUsername).toBeEditable({ timeout: 5_000 });
+      await providerUsername.fill("alice");
+      await page
+        .getByLabel("Password", { exact: true })
+        .fill("alice-dev-password");
+      await page
+        .getByRole("button", { name: "Sign In", exact: true })
+        .click();
       await expect(page).toHaveURL(new RegExp(`/${alice}/?$`));
       await expect(
         page.getByRole("button", { name: /sign out/i }),

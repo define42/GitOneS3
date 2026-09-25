@@ -58,6 +58,16 @@ colors cover text, surfaces, borders, status messages, and keyboard focus.
    session; signing out of GitOne does not revoke a copied cookie or end that
    external session. A copied GitOne cookie remains valid until its expiry.
 
+Every sign-in and registration explicitly requests provider interaction:
+Google uses `prompt=select_account` for its account chooser; Keycloak and other
+OIDC providers use `prompt=login` for reauthentication. After signing out, you
+can select a different provider account in the same browser. The GitOne username
+does not select the provider account automatically. If Keycloak shows the previous
+account on its reauthentication screen, choose **Restart login** to select another.
+A mismatched account remains
+blocked with a message asking you to try another account; ownership is never
+reassigned, and an occupied registration name still returns a claim conflict.
+
 Personal spaces live at `/<username>`; shared spaces at `/<group>`. Group
 settings use `/<group>/settings`, and direct invitation links use
 `/<group>/invitations/accept`. Create repositories at
@@ -203,14 +213,20 @@ traces and Playwright MCP artifacts are excluded from Git; treat them as private
 because authentication failures may capture temporary OIDC parameters or a
 newly displayed access token.
 
-The suite uses real Keycloak authorization-code redirects and two separate
-browser contexts. It covers username registration and conflicts, login/logout,
+The account/group/repository flows use real Keycloak authorization-code redirects
+and separate browser contexts for multiple users. They cover username registration
+and conflicts, login/logout,
 group creation, invitation discovery and acceptance, role changes, immediate
 revocation, invitation cancellation, the last-owner safeguard, owner departure,
 and mobile navigation. Repository tests cover creation in personal and shared
 spaces, duplicate names, empty repositories, README/file/branch/history views,
-reader write denial, private access, and login deep links. No authentication,
-group, or repository APIs are mocked.
+reader write denial, private access, and login deep links. These flows do not mock
+authentication, group, or repository APIs.
+
+A dedicated account-switching regression keeps one browser context and retains
+Keycloak cookies while switching between Alice and Bob. It checks interactive
+login and registration, rejects a wrong-account login, and verifies that retrying
+with the correct account succeeds without changing either username's ownership.
 
 See [the Compose guide](../deploy/compose/README.md) for demo accounts, local CA
 trust, resource requirements, and persistence. Test-created namespaces and
