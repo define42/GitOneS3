@@ -366,6 +366,13 @@ inside Docker and needs neither on the host. Direct Go checks remain
 checkout serves a clear UI-build-required page while leaving API/protocol
 handlers available. Generated UI files are not committed.
 
+[GitHub Actions CI](.github/workflows/ci.yml) runs on every push and pull request,
+and can also be started manually. Separate jobs run Go unit tests with race
+detection, randomized order, and coverage, and golangci-lint v2.13.2 using
+`.golangci.yml`. Both jobs use the Go version from `go.mod`; neither requires
+Node.js, Docker, or repository secrets. Browser and integration tests remain
+separate from this Go unit-test workflow.
+
 ## Kubernetes
 
 The Helm chart derives the StatefulSet replica count directly from
