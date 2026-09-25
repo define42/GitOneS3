@@ -327,7 +327,7 @@ func TestAPIOpenAPIAndCrossShardForwarding(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &document); err != nil {
 		t.Fatal(err)
 	}
-	if w.Code != 200 || document.OpenAPI != "3.1.0" || len(document.Paths) != 16 {
+	if w.Code != 200 || document.OpenAPI != "3.1.0" || len(document.Paths) != 19 {
 		t.Fatalf("invalid API specification: status=%d, paths=%d, openapi=%s", w.Code, len(document.Paths), document.OpenAPI)
 	}
 	if !strings.Contains(string(document.Paths["/api/v1/groups/{name}/invitations"]), `"security"`) {

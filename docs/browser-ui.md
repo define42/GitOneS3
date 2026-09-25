@@ -31,7 +31,14 @@ provide the UI's Huma session/group/repository API.
    or a group where you are a developer or owner. Optionally initialize a README
    and then browse branches, directories, files, and commit history. Group
    readers can browse existing repositories but cannot create them.
-6. Sign out to clear the GitOne session. The identity provider has its own SSO
+6. Open **Access tokens** at `/auth/tokens` to generate a Git credential with
+   selected repositories (the recommended default) or all accessible
+   repositories, read or read/write permission, and an expiry. All-accessible
+   tokens can be created before any repositories exist and also cover future
+   repositories and groups joined later, subject to current namespace access.
+   Copy the token once and store it securely; later listings show metadata only.
+   Revoke credentials from the same page. Signing out does not revoke tokens.
+7. Sign out to clear the GitOne session. The identity provider has its own SSO
    session; signing out of GitOne does not revoke a copied cookie or end that
    external session. A copied GitOne cookie remains valid until its expiry.
 
@@ -56,9 +63,11 @@ repositories belong to the bound user; group membership is checked on each API
 request. Developers and owners may create group repositories; readers may
 browse. Public visibility and per-repository ACL overrides are not exposed.
 
-Git Smart HTTP and LFS remain extension points and return `501`; repository
-creation does not enable Git client clone, push, or pull. Repository editing,
-renaming, and deletion are not implemented.
+Repository pages show an HTTPS clone URL without credentials. Native Git uses
+your GitOne username and personal access token, and supports clone, fetch,
+pull, and push. Pushed files and commits appear in these same browser views.
+See [Git authentication](git-authentication.md) for setup and limits. Git LFS
+still returns `501`; browser file editing, renaming, and deletion are not implemented.
 
 Browsing currently selects branch names (not tags or arbitrary commit IDs).
 History returns at most 100 first-parent commits, directories at most 1,000
@@ -81,6 +90,9 @@ available for existing clients; browser navigation is selected with
 | `POST /api/v1/logout` | Clear the GitOne session cookie |
 | `GET /api/v1/names/{name}` | Check namespace availability without reserving it |
 | `GET /api/v1/users/{name}` | Resolve a registered username to an immutable user ID (signed-in callers) |
+| `GET /api/v1/users/{name}/tokens` | List your token metadata without secrets |
+| `POST /api/v1/users/{name}/tokens` | Create a scoped, expiring token; reveal its secret once |
+| `DELETE /api/v1/users/{name}/tokens/{id}` | Revoke your token |
 | `GET /api/v1/spaces?shard=N` | List the caller's memberships and invitations on one shard |
 | `GET /api/v1/groups/{name}` | Read an authorized group view |
 | `POST /api/v1/groups/{name}` | Claim a group and make the caller owner |
@@ -103,6 +115,17 @@ session cookies authenticate requests; mutations also require the configured
 public `Origin` and the session's `X-CSRF-Token`. Group membership is read from
 the authoritative shard's S3 bucket and checked again during conditional
 updates. The UI is not an authorization boundary.
+
+Token management uses the browser session and CSRF protection, not another PAT.
+Selected-repository tokens require a nonempty `repositories` list; this is the
+default when `allRepositories` is omitted or `false`. Setting `allRepositories`
+to `true` requires that list to be omitted or empty, and covers current and
+future accessible personal/group repositories. Prefer selected repositories
+for least privilege. Both modes enforce identity, current namespace
+membership/role, read/write permission, expiry, and revocation. Neither grants
+access to repository creation or account/group/token management APIs. The token
+page does not persist secrets in local/session storage or URLs. Treat the
+clipboard as sensitive after copying.
 
 Space discovery currently lists namespace keys on each shard and then reads
 records with a 10,000-record cap and a 15-second request deadline. The storage
@@ -161,7 +184,8 @@ Tests target `https://gitone.localhost:8443` by default; set `GITONE_E2E_URL` to
 override it. The test browser accepts the generated local certificate, without
 changing application TLS verification or the host trust store. Test screenshots,
 traces and Playwright MCP artifacts are excluded from Git; treat them as private
-because authentication failures may capture temporary OIDC parameters.
+because authentication failures may capture temporary OIDC parameters or a
+newly displayed access token.
 
 The suite uses real Keycloak authorization-code redirects and two separate
 browser contexts. It covers username registration and conflicts, login/logout,

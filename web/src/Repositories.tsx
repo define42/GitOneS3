@@ -387,8 +387,7 @@ export function NewRepository({ session }: { session: Session }) {
               </span>
             </label>
             <p className="field-help">
-              Repository browsing is available here. Git CLI clone, push, and
-              pull are not supported yet.
+              Clone and push over HTTPS using a personal access token.
             </p>
             {error && (
               <div id="repository-error" ref={errorSummary} tabIndex={-1}>
@@ -418,10 +417,138 @@ type BrowserData = {
   commits?: RepositoryCommit[];
 };
 
+function shellQuote(value: string) {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
+function ClonePanel({
+  repository,
+  username,
+  expanded = false,
+}: {
+  repository: Repository;
+  username: string;
+  expanded?: boolean;
+}) {
+  const cloneURL = `${location.origin}/${repository.namespace}/${repository.name}.git`;
+  const [status, setStatus] = useState("");
+  async function copyURL() {
+    try {
+      await navigator.clipboard.writeText(cloneURL);
+      setStatus("Clone URL copied.");
+    } catch {
+      setStatus(
+        "Clipboard access was denied. Select and copy the URL manually.",
+      );
+    }
+  }
+  return (
+    <details className="panel clone-panel" open={expanded || undefined}>
+      <summary>Clone with HTTPS</summary>
+      <div className="clone-content">
+        <label htmlFor="repository-clone-url">HTTPS clone URL</label>
+        <div className="copy-field">
+          <input
+            id="repository-clone-url"
+            readOnly
+            value={cloneURL}
+            onFocus={(event) => event.target.select()}
+          />
+          <button className="button" type="button" onClick={copyURL}>
+            Copy clone URL
+          </button>
+        </div>
+        {status && (
+          <p className="field-help" role="status">
+            {status}
+          </p>
+        )}
+        <pre tabIndex={0}>{`git clone ${shellQuote(cloneURL)}`}</pre>
+        <p className="field-help">
+          When Git asks for credentials, use your personal username{" "}
+          <strong>{username}</strong> and an{" "}
+          <a href="/auth/tokens">access token</a> as the password. Select this
+          repository when generating the token, or explicitly choose all
+          repositories you have access to. Use read permission for clone/pull,
+          or write permission for push.
+        </p>
+      </div>
+    </details>
+  );
+}
+
+function EmptyRepository({
+  repository,
+  username,
+}: {
+  repository: Repository;
+  username: string;
+}) {
+  const cloneURL = `${location.origin}/${repository.namespace}/${repository.name}.git`;
+  const branch = shellQuote(repository.defaultBranch);
+  const createCommands = [
+    `mkdir ${shellQuote(repository.name)}`,
+    `cd ${shellQuote(repository.name)}`,
+    `git init -b ${branch}`,
+    `printf ${shellQuote(`# ${repository.name}\\n`)} > README.md`,
+    "git add README.md",
+    'git commit -m "Initial commit"',
+    `git remote add origin ${shellQuote(cloneURL)}`,
+    `git push -u origin ${shellQuote(`HEAD:refs/heads/${repository.defaultBranch}`)}`,
+  ].join("\n");
+  return (
+    <div className="empty-repository">
+      <div className="panel empty-state">
+        <div className="empty-icon">
+          <RepoIcon />
+        </div>
+        <h2>This repository is empty</h2>
+        <p>
+          {repository.canWrite
+            ? "Push your first commit from Git to add files, branches, and history."
+            : "An owner or developer can push the first commit. You can clone this repository with a read token."}
+        </p>
+      </div>
+      <ClonePanel repository={repository} username={username} expanded />
+      {repository.canWrite && (
+        <section
+          className="panel git-quickstart"
+          aria-label="Repository quick setup"
+        >
+          <h2>Create a new repository locally</h2>
+          <p className="muted">
+            Run these commands in the parent directory where you want the
+            project folder. Configure your Git author name and email first if
+            needed.
+          </p>
+          <pre tabIndex={0}>{createCommands}</pre>
+          <h2>Or push an existing repository</h2>
+          <p className="muted">
+            Run inside your existing local repository. If an origin remote
+            already exists, update it instead of adding another.
+          </p>
+          <pre
+            tabIndex={0}
+          >{`git remote add origin ${shellQuote(cloneURL)}\ngit push -u origin HEAD`}</pre>
+          <p className="field-help">
+            Use a write token for{" "}
+            <code>
+              {repository.namespace}/{repository.name}
+            </code>
+            . Your group or personal access must also allow writes.
+          </p>
+        </section>
+      )}
+    </div>
+  );
+}
+
 export function RepositoryPage({
+  session,
   namespace,
   name,
 }: {
+  session: Session;
   namespace: string;
   name: string;
 }) {
@@ -566,21 +693,10 @@ export function RepositoryPage({
       ) : !repository || !data ? (
         <Loading text="Loading repository…" />
       ) : repository.empty ? (
-        <div className="panel empty-state">
-          <div className="empty-icon">
-            <RepoIcon />
-          </div>
-          <h2>This repository is empty</h2>
-          <p>
-            It has no files, branches, or commits yet. Git CLI clone, push, and
-            pull are not supported yet.
-          </p>
-          <a className="button" href={`/${namespace}`}>
-            Back to {namespace}
-          </a>
-        </div>
+        <EmptyRepository repository={repository} username={session.username!} />
       ) : (
         <>
+          <ClonePanel repository={repository} username={session.username!} />
           <div className="repository-toolbar">
             <div className="branch-control">
               <label htmlFor="repository-branch">Branch</label>
@@ -726,7 +842,8 @@ export function RepositoryPage({
             {repository.canWrite
               ? "You have write access to this space."
               : "You have read-only access to this space."}{" "}
-            Git CLI clone, push, and pull are not supported yet.
+            Clone over HTTPS with a repository-scoped{" "}
+            <a href="/auth/tokens">access token</a>.
           </p>
         </>
       )}

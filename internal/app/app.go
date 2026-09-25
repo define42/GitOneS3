@@ -16,9 +16,11 @@ import (
 
 	"github.com/define42/GitOneS3/internal/auth"
 	"github.com/define42/GitOneS3/internal/config"
+	"github.com/define42/GitOneS3/internal/gittransport"
 	"github.com/define42/GitOneS3/internal/httpserver"
 	"github.com/define42/GitOneS3/internal/protocol"
 	"github.com/define42/GitOneS3/internal/proxy"
+	"github.com/define42/GitOneS3/internal/repository"
 	"github.com/define42/GitOneS3/internal/shard"
 	"github.com/define42/GitOneS3/internal/storage/s3store"
 	"github.com/define42/GitOneS3/internal/webui"
@@ -94,6 +96,15 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	var ownerHandler http.Handler = protocol.NewHandler(nil, nil)
 	var requestRouter proxy.Router = router
 	if cfg.Auth.Enabled {
+		repositories, err := repository.New(objectStore)
+		if err != nil {
+			return nil, fmt.Errorf("create repository store: %w", err)
+		}
+		gitHandler, err := gittransport.New(repositories)
+		if err != nil {
+			return nil, fmt.Errorf("create Git transport: %w", err)
+		}
+		ownerHandler = protocol.NewHandler(gitHandler, nil)
 		provider, err := auth.NewOIDC(ctx, cfg.Auth)
 		if err != nil {
 			return nil, fmt.Errorf("create OIDC authentication: %w", err)
@@ -101,6 +112,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		authHandler, err := auth.New(auth.Options{
 			Config: cfg.Auth, LocalShard: shard.ShardID(cfg.LocalShard),
 			Router: router, Store: objectStore, Provider: provider, Next: ownerHandler,
+			TokenResolver: destinationResolver, TokenTransport: forwardTransport,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create authentication handler: %w", err)

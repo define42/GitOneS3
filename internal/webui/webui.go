@@ -123,7 +123,7 @@ func (h *handler) isNavigation(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
-	case "/auth/login", "/auth/register", "/auth/new-group", "/auth/new-repository":
+	case "/auth/login", "/auth/register", "/auth/new-group", "/auth/new-repository", "/auth/tokens":
 		return true
 	}
 

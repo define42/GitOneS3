@@ -1060,6 +1060,298 @@ label {
 .repository-access {
   margin-top: 22px;
 }
+.copy-field {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  min-width: 0;
+}
+.copy-field input {
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.copy-field .button {
+  flex: none;
+}
+.clone-panel {
+  margin-bottom: 24px;
+}
+.clone-panel summary,
+.token-scope-details summary {
+  padding: 12px 18px;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text);
+}
+summary:focus-visible,
+[tabindex="-1"]:focus-visible {
+  outline: 3px solid var(--blue);
+  outline-offset: 3px;
+}
+.clone-content {
+  padding: 0 18px 4px;
+}
+.clone-content pre,
+.git-quickstart pre {
+  overflow: auto;
+  padding: 16px;
+  background: var(--subtle);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font:
+    13px/1.8 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.empty-repository > .empty-state {
+  margin-bottom: 24px;
+}
+.git-quickstart {
+  padding: 24px;
+}
+.git-quickstart h2 {
+  margin-bottom: 12px;
+}
+.git-quickstart pre + h2 {
+  margin-top: 28px;
+}
+.token-page {
+  margin-block: 36px 70px;
+  min-height: calc(100vh - 275px);
+}
+.side-link.active {
+  background: var(--subtle);
+  border-left: 3px solid var(--blue);
+  font-weight: 600;
+}
+.token-content {
+  min-width: 0;
+}
+.token-reveal {
+  padding: 24px;
+  background: var(--subtle);
+  border-color: var(--green);
+}
+.token-reveal > p:first-of-type {
+  margin-bottom: 18px;
+  color: var(--muted);
+}
+.token-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 20px;
+}
+.token-options > div {
+  min-width: 0;
+}
+.token-scope-fieldset {
+  padding: 0;
+  border: 0;
+  margin: 24px 0;
+  min-width: 0;
+}
+.token-scope-fieldset legend {
+  font-size: 16px;
+  font-weight: 600;
+  padding: 0;
+}
+.token-scope-fieldset > p {
+  margin: 8px 0 15px;
+}
+.token-scope-list {
+  margin-top: 12px;
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.token-scope-modes {
+  margin-block: 14px 20px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.token-scope-mode {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  margin: 0;
+  cursor: pointer;
+}
+.token-scope-mode + .token-scope-mode {
+  border-top: 1px solid var(--border);
+}
+.token-scope-mode:has(input:checked) {
+  background: var(--subtle);
+}
+.token-scope-mode input {
+  width: 18px;
+  min-height: 18px;
+  flex: none;
+  margin: 3px 0 0;
+  accent-color: var(--blue);
+}
+.token-scope-mode > span {
+  min-width: 0;
+}
+.token-scope-mode .muted {
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+  font-weight: 400;
+}
+.token-all-warning {
+  padding: 16px;
+  background: var(--subtle);
+  border-left: 3px solid var(--blue);
+  border-radius: 4px;
+}
+.token-all-warning p {
+  margin-top: 8px;
+  color: var(--muted);
+}
+.token-reveal-scope {
+  margin: 16px 0;
+  overflow-wrap: anywhere;
+}
+.token-scope-details > p {
+  font-size: 13px;
+  margin-top: 8px;
+}
+.token-scope-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  margin: 0;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.token-scope-row:last-child {
+  border-bottom: 0;
+}
+.token-scope-row:hover {
+  background: var(--subtle);
+}
+.token-scope-row input {
+  width: 18px;
+  min-height: 18px;
+  flex: none;
+  margin: 3px 0 0;
+  accent-color: var(--green);
+}
+.token-scope-row > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.token-scope-row .muted {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 400;
+}
+.token-scope-row.unavailable {
+  color: var(--muted);
+  background: var(--subtle);
+  cursor: not-allowed;
+}
+.token-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.token-filter label {
+  margin: 0;
+  font-size: 13px;
+}
+.token-filter select {
+  width: auto;
+}
+.token-row {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.token-row:last-child {
+  border-bottom: 0;
+}
+.token-row-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.token-row-heading h3 {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.token-row-heading .button {
+  margin-left: auto;
+}
+.token-dates {
+  margin: 10px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.token-scope-details summary {
+  padding: 4px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.token-scope-details ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+.token-status-active {
+  color: var(--green);
+}
+.token-status-expired,
+.token-status-revoked {
+  background: var(--subtle);
+}
+.token-form .notice h3 {
+  font-size: 16px;
+  margin-bottom: 7px;
+}
+.token-form .notice a {
+  display: inline-block;
+  margin-top: 8px;
+}
+@media (max-width: 760px) {
+  .token-page .page-heading {
+    flex-wrap: wrap;
+  }
+  .token-page .settings-aside .side-link {
+    padding: 12px;
+    font-size: 14px;
+  }
+  .token-content .section-heading {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+}
+@media (max-width: 600px) {
+  .token-options {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+  .copy-field {
+    flex-wrap: wrap;
+  }
+  .copy-field input {
+    flex: 1 0 100%;
+  }
+  .token-reveal,
+  .token-row,
+  .git-quickstart {
+    padding: 18px;
+  }
+  .token-scope-row {
+    padding: 12px;
+  }
+}
 .repository-error .form-actions {
   flex-wrap: wrap;
 }

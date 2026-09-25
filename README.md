@@ -54,6 +54,9 @@ Git/LFS client -> public Service -> any gitone-N
 - Private repository creation and browsing in personal or shared namespaces,
   with optional README initialization, durable Git objects in S3, branch/file
   navigation, and commit history.
+- Fine-grained, expiring personal access tokens and bounded native Git Smart
+  HTTP clone, fetch, pull, and push, with owner-shard token verification and
+  current namespace permissions.
 - Bounded live-compaction planning that keeps large packs intact, selects only
   fragmented small packs plus the incoming pack, and queues oversized work.
 - S3-backed readiness, structured request logs, graceful HTTP
@@ -63,13 +66,11 @@ Git/LFS client -> public Service -> any gitone-N
 ## Deliberate Extension Points
 
 The architecture document is a ten-phase platform plan and leaves several
-external contracts unspecified. The owner-side dispatcher recognizes standard
-Git Smart HTTP and Git LFS routes, but currently returns `501 Not Implemented`
-until these engines are installed:
+external contracts unspecified. Git Smart HTTP is implemented for bounded
+repositories; these parts remain extension points:
 
-- `git-upload-pack` / `git-receive-pack`, pack validation, and ref semantics;
 - the `control.git` compiler and persisted ACL generations;
-- LFS batch/content/locking/quota handlers;
+- LFS batch/content/locking/quota handlers (currently `501 Not Implemented`);
 - live pack compaction, retained-generation tracing, and garbage collection;
 - production mTLS/workload-identity integration, rate limits, metrics, and
   audit sinks.
@@ -90,6 +91,7 @@ internal/storage/           object and repository CAS contracts
 internal/storage/s3store/   fixed-bucket AWS S3 adapter
 internal/authz/             inherited shard-local authorization
 internal/protocol/          Smart HTTP and LFS owner-side dispatch
+internal/gittransport/      bounded Smart HTTP upload/receive-pack engine
 internal/repository/        repository metadata, Git objects, and browser reads
 internal/maintenance/       bounded compaction planning
 internal/httpserver/        health, logging, and graceful lifecycle
@@ -150,7 +152,8 @@ lifecycle rule for abandoned objects and old versions below
 using Docker Compose. It creates the buckets and imports demo accounts
 automatically. See [local setup, TLS trust and login instructions](deploy/compose/README.md).
 Use `make stop` to stop the stack without deleting data, `make logs` for logs,
-and `make smoke` to exercise real login and shared group access.
+and `make smoke` to exercise real login and shared group access. With native Git
+and Python on the host, `make smoke-git` validates real HTTPS Git operations.
 The former single-process command is available as `make run-local`.
 
 Open <https://gitone.localhost:8443> for the browser interface. Choose an available
@@ -231,7 +234,7 @@ and expire after 12 hours. Shared keys allow verification after forwarding or
 pod replacement. Changing keys invalidates existing sessions and login attempts;
 coordinate key updates across shards.
 
-With authentication enabled, namespace requests require a session. Personal
+With authentication enabled, browser namespace requests require a session. Personal
 spaces are restricted to their bound account; groups check current membership
 and the requested operation. The verified provider-scoped identity is passed to
 downstream handlers and is returned as `userId` by the session endpoint.
@@ -242,8 +245,13 @@ does not grant access to another user's private space. Unsafe methods require
 cookie; it does not revoke a copied cookie, which remains valid until expiry.
 Liveness/readiness endpoints remain unauthenticated.
 
-This implements browser login and a UI, not Git CLI credentials. Git/LFS
-engines still return `501`. Authentication is opt-in for existing deployments;
+Native Git clients use a GitOne personal access token over HTTPS, not their
+Google/Keycloak password or browser cookie. Manage tokens at `/auth/tokens`;
+selected repositories are the recommended default. The optional all-accessible
+scope includes current and future personal/group repositories, including groups
+joined later, but always respects current namespace access and token permission.
+See [Git authentication and transport limits](docs/git-authentication.md).
+Git LFS remains unimplemented. Authentication is opt-in for existing deployments;
 with it disabled, the previous unauthenticated protocol stubs remain.
 
 Protocol references: [Google OIDC](https://developers.google.com/identity/openid-connect/openid-connect)
@@ -272,7 +280,9 @@ Groups have three roles, inherited by repositories below that group:
 | `developer` | Reader access plus repository creation; Git push/LFS mutation permission |
 | `owner` | Developer access plus invitations and membership management |
 
-Git/LFS protocol engines still return `501` after these permission checks.
+Git Smart HTTP additionally requires the token's selected-repository or
+all-accessible scope and read/write permission. Neither scope bypasses current
+group membership or role. LFS still returns `501` after authorization.
 Group roles apply across the whole namespace; per-repository overrides are
 not implemented yet. Membership is read from S3 on each request rather than
 embedded in the session, so revocations take effect on subsequent requests.
@@ -330,10 +340,13 @@ and commit history. File paths and refs are query parameters, not extra URL
 path components. Browse requests enforce current namespace membership, so
 removing a group member removes their subsequent repository access as well.
 
-This is repository creation and browser access, not a working Git transport.
-Git Smart HTTP and Git LFS still return `501 Not Implemented`: cloning,
-pushing, and pulling with a Git client are not available yet. Repository
-editing, deletion, and renaming are also not implemented.
+Clone from `https://<host>/<namespace>/<repository>.git`, using your GitOne
+username and a personal access token covering that repository as the password.
+Native Git push updates the same durable objects and refs that the browser reads.
+An empty repository accepts its first push. See the
+[Git guide](docs/git-authentication.md) for setup, group authorization, and
+current size/protocol limits. Git LFS, browser file editing, repository deletion,
+and renaming are not implemented.
 
 ## Build And Test
 
@@ -343,6 +356,7 @@ make test
 make lint
 make ui-check            # TypeScript checks and Vite production build
 make test-ui             # Playwright against a running local Compose stack
+go test -tags=integration ./internal/auth -run '^TestGitPAT'  # requires native Git
 ```
 
 Local source builds require Go and Node.js 22.12+ with npm; `make run` builds both

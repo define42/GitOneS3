@@ -69,6 +69,9 @@ func (s *Store) putSnapshot(ctx context.Context, repositoryID, kind string, valu
 	if err != nil {
 		return "", fmt.Errorf("encode %s snapshot: %w", kind, err)
 	}
+	if len(data) > maxJSONBytes {
+		return "", ErrLimit
+	}
 	digest := sha256.Sum256(data)
 	relative := "states/00000000000000000001-" + kind + "-" + hex.EncodeToString(digest[:]) + ".json"
 	if err := s.repositories.PutImmutable(ctx, "repos/"+repositoryID+"/"+relative, bytes.NewReader(data), int64(len(data))); err != nil {
@@ -130,6 +133,9 @@ func (s *Store) Branches(ctx context.Context, namespace, name string) ([]Branch,
 	}
 	branches := make([]Branch, 0, len(snap.refs.Refs))
 	for ref, commit := range snap.refs.Refs {
+		if !strings.HasPrefix(ref, "refs/heads/") {
+			continue
+		}
 		branches = append(branches, Branch{Name: strings.TrimPrefix(ref, "refs/heads/"), Commit: commit})
 	}
 	slices.SortFunc(branches, func(a, b Branch) int { return strings.Compare(a.Name, b.Name) })
@@ -195,11 +201,13 @@ func (s *Store) treeEntries(ctx context.Context, snap snapshot, id string) ([]tr
 		case "40000", "040000":
 			kind = "tree"
 		case "100644", "100755", "120000":
+		case "160000":
+			kind = "gitlink"
 		default:
 			return nil, ErrCorrupt
 		}
 		id := hex.EncodeToString(data[zero+1 : zero+21])
-		if snap.manifest.Objects[id].Type != kind {
+		if kind != "gitlink" && snap.manifest.Objects[id].Type != kind {
 			return nil, ErrCorrupt
 		}
 		seen[name] = true
@@ -279,6 +287,9 @@ func (s *Store) Tree(ctx context.Context, namespace, name, ref, path string) (Tr
 		size := snap.manifest.Objects[entry.id].Size
 		if entry.kind == "tree" {
 			kind, size = "directory", 0
+		}
+		if entry.kind == "gitlink" {
+			kind, size = "submodule", 0
 		}
 		result.Entries = append(result.Entries, Entry{Name: entry.name, Path: childPath, Type: kind, Size: size})
 	}

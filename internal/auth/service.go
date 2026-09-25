@@ -72,28 +72,32 @@ func Subject(ctx context.Context) (authz.Subject, bool) {
 
 // Options supplies only shard-local storage; callbacks are routed before use.
 type Options struct {
-	Config     config.Auth
-	LocalShard shard.ShardID
-	Router     *shard.Router
-	Store      storage.ObjectStore
-	Provider   Provider
-	Next       http.Handler
+	Config         config.Auth
+	LocalShard     shard.ShardID
+	Router         *shard.Router
+	Store          storage.ObjectStore
+	Provider       Provider
+	Next           http.Handler
+	TokenResolver  TokenResolver
+	TokenTransport http.RoundTripper
 }
 
 // Service resolves callback state on any pod and authenticates on the owner.
 type Service struct {
-	local        shard.ShardID
-	router       *shard.Router
-	store        storage.ObjectStore
-	repositories *repository.Store
-	provider     Provider
-	next         http.Handler
-	origin       string
-	issuer       string
-	callbackPath string
-	loginCodec   *securecookie.SecureCookie
-	sessionCodec *securecookie.SecureCookie
-	api          http.Handler
+	local         shard.ShardID
+	router        *shard.Router
+	store         storage.ObjectStore
+	repositories  *repository.Store
+	provider      Provider
+	next          http.Handler
+	origin        string
+	issuer        string
+	callbackPath  string
+	loginCodec    *securecookie.SecureCookie
+	sessionCodec  *securecookie.SecureCookie
+	api           http.Handler
+	tokenResolver TokenResolver
+	tokenClient   *http.Client
 }
 
 func New(options Options) (*Service, error) {
@@ -118,6 +122,9 @@ func New(options Options) (*Service, error) {
 		local: options.LocalShard, router: options.Router, store: options.Store,
 		repositories: repositories,
 		provider:     options.Provider, next: options.Next, origin: options.Config.PublicURL,
+		tokenResolver: options.TokenResolver,
+		tokenClient: &http.Client{Transport: options.TokenTransport, Timeout: 5 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		issuer: options.Config.IssuerURL(), callbackPath: options.Config.CallbackPath(),
 		loginCodec:   securecookie.New(hash, block).MaxAge(int(loginLifetime.Seconds())).SetSerializer(securecookie.JSONEncoder{}),
 		sessionCodec: securecookie.New(hash, block).MaxAge(int(sessionLifetime.Seconds())).SetSerializer(securecookie.JSONEncoder{}),
@@ -200,6 +207,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == s.callbackPath {
 		s.callback(w, r)
+		return
+	}
+	if isGitRequest(r) {
+		s.serveGit(w, r, route.Path.TopLevel)
 		return
 	}
 	username := route.Path.TopLevel
@@ -467,7 +478,7 @@ func (s *Service) validReturnTo(target string) bool {
 		}
 		return true
 	}
-	if u.Path == "/" || u.Path == "/auth/new-group" {
+	if u.Path == "/" || u.Path == "/auth/new-group" || u.Path == "/auth/tokens" {
 		return len(query) == 0
 	}
 	parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(u.Path, "/"), "/"), "/")

@@ -3,6 +3,7 @@ import type { FormEvent, ReactNode } from "react";
 import { api, errorMessage, safeReturnTo, validName } from "./api";
 import type { Group, Role, Session, Space } from "./api";
 import { NewRepository, RepositoryList, RepositoryPage } from "./Repositories";
+import { TokensPage } from "./Tokens";
 
 function Icon({
   name = "branch",
@@ -132,6 +133,9 @@ function Header({ session }: { session: Session }) {
               <a href={`/${session.username}`} className="account-link">
                 <Avatar name={session.username!} />
                 <span>{session.username}</span>
+              </a>
+              <a className="header-link" href="/auth/tokens">
+                Settings
               </a>
               <button
                 className="header-button"
@@ -377,6 +381,10 @@ function Sidebar({ session }: { session: Session }) {
         <a href="/auth/new-group" className="side-link">
           <Icon name="plus" />
           Create a group
+        </a>
+        <a href="/auth/tokens" className="side-link">
+          <Icon name="lock" />
+          Settings
         </a>
       </nav>
       <div className="sidebar-note">
@@ -1164,13 +1172,14 @@ export function App() {
   else if (path === "/auth/new-group") content = <NewGroup session={session} />;
   else if (path === "/auth/new-repository")
     content = <NewRepository session={session} />;
+  else if (path === "/auth/tokens") content = <TokensPage session={session} />;
   else {
     const [, name, subpath, action] = path.split("/");
     content =
       subpath === "invitations" && action === "accept" ? (
         <Invitation session={session} name={name} />
       ) : subpath && subpath !== "settings" ? (
-        <RepositoryPage namespace={name} name={subpath} />
+        <RepositoryPage session={session} namespace={name} name={subpath} />
       ) : (
         <GroupPage
           session={session}

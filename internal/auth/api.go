@@ -160,12 +160,29 @@ func (s *Service) newAPIHandler() http.Handler {
 	apiConfig.DocsPath = "/api/docs"
 	apiConfig.SchemasPath = "/api/schemas"
 	apiConfig.Components.SecuritySchemes = map[string]*huma.SecurityScheme{
+		"pat": {Type: "http", Scheme: "basic", Description: "GitOne username and personal access token."},
 		"session": {Type: "apiKey", In: "cookie", Name: sessionCookie,
 			Description: "OIDC session cookie. Mutations also require the configured Origin and X-CSRF-Token from the session response."},
 	}
 	api := humago.New(mux, apiConfig)
 	api.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
 		r, _ := humago.Unwrap(ctx)
+		if ctx.Operation().OperationID == "verify-token" {
+			credentials, ok := parseTokenCredentials(r)
+			if !ok {
+				ctx.SetHeader("WWW-Authenticate", `Basic realm="GitOne", charset="UTF-8"`)
+				_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "invalid credentials")
+				return
+			}
+			if origin := r.Header.Get("Origin"); origin != "" && origin != s.origin {
+				_ = huma.WriteErr(api, ctx, http.StatusForbidden, "invalid origin")
+				return
+			}
+			requestCtx, cancel := context.WithTimeout(ctx.Context(), 5*time.Second)
+			defer cancel()
+			next(huma.WithValue(huma.WithContext(ctx, requestCtx), tokenCredentialsKey{}, credentials))
+			return
+		}
 		current, err := s.readSession(r)
 		public := ctx.Operation().OperationID == "get-session" || ctx.Operation().OperationID == "check-name"
 		if err != nil && !public {
@@ -211,6 +228,7 @@ func (s *Service) newAPIHandler() http.Handler {
 			return s.apiUpdateGroup(ctx, input.Name, "remove", input.Body.UserID, "")
 		})
 	s.registerRepositoryAPI(api)
+	s.registerTokenAPI(api)
 	return mux
 }
 

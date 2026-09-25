@@ -24,6 +24,7 @@ pods; each still listens on **one HTTP port, 8080** inside the network.
 | GitOne | <https://gitone.localhost:8443> |
 | Register a GitOne username | <https://gitone.localhost:8443/auth/register> |
 | Sign in | <https://gitone.localhost:8443/auth/login> |
+| Git access tokens | <https://gitone.localhost:8443/auth/tokens> |
 | API documentation | <https://gitone.localhost:8443/api/docs> |
 | Keycloak admin | <https://keycloak.gitone.localhost:8443/admin/> |
 | MinIO S3 | <http://localhost:9000> |
@@ -48,9 +49,10 @@ does not end Keycloak's separate SSO session.
 Use **New repository** to create a private repository in your personal namespace
 or a group where you are a developer or owner. Optional README initialization
 writes real Git objects to MinIO, and the UI can browse branches, files, and
-commit history. Group readers can browse but cannot create repositories. Git
-Smart HTTP and LFS still return `501 Not Implemented`; Git client clone, push,
-and pull are not available yet.
+commit history. Group readers can browse but cannot create repositories. Create
+a repository-scoped token under **Access tokens** to clone, fetch, pull, or push
+using native Git; use your GitOne username and the token as the password.
+Git LFS still returns `501 Not Implemented`.
 
 Keycloak's admin username is `admin`; its generated password is in
 `.local/keycloak.env`. MinIO's username is `gitone-local`; its generated password
@@ -83,12 +85,29 @@ curl --noproxy '*' --cacert .local/tls/ca.crt \
   https://gitone.localhost:8443/readyz
 ```
 
+For Git, resolve `gitone.localhost` locally as described above and trust the
+generated CA explicitly. Run from the GitOne source checkout, replacing
+`alice/project` with your existing repository:
+
+```sh
+git -c http.sslCAInfo="$PWD/.local/tls/ca.crt" \
+  clone https://gitone.localhost:8443/alice/project.git
+git -C project config http.sslCAInfo "$PWD/.local/tls/ca.crt"
+```
+
+Git prompts for the registered GitOne username and the token. Never put the
+token in the URL or disable certificate verification. The local repository
+setting preserves CA verification for later fetches and pushes. See the
+[Git authentication guide](../../docs/git-authentication.md) for permission,
+revocation, credential storage, and repository-size limits.
+
 ## Commands and persistence
 
 ```sh
 make run                 # initialize, build, start in background, wait for health
 make smoke               # real OIDC login + group invitation/access test
 make test-ui             # Playwright browser flows (install test tools below)
+make smoke-git           # native HTTPS Git + OIDC + MinIO (host Git/Python)
 make logs                # follow service logs
 make stop                # stop/remove containers; preserve data and keys
 docker compose ps        # inspect all four GitOne instances and dependencies
@@ -100,6 +119,14 @@ claims and transactions, and shared cookies through the round-robin proxy.
 It checks all four shard readiness endpoints, invites/accepts a member, enforces
 reader permissions, and verifies immediate revocation. It creates uniquely
 named `smoke-*` user/group namespace records, which remain in local storage.
+
+The native Git smoke test additionally verifies clone, push, pull, an empty
+repository's first push, agreement with browser file/history APIs, read-only
+and revoked PATs, and group membership revocation across different owner shards.
+It needs host Python 3.10+ and Git, trusts `.local/tls/ca.crt`, and handles local
+name resolution itself. It does not print credentials, puts no token in a URL,
+and revokes generated PATs during cleanup. Its uniquely named `git-*` namespaces
+and repository data remain in MinIO; temporary Git working trees are removed.
 
 For the browser suite, install Node.js 22.12+ on the host, then run:
 
@@ -115,7 +142,8 @@ The Playwright configuration targets the running Compose stack and allows its
 generated local certificate only in the test browser. Application TLS
 verification remains enabled. Browser traces, screenshots, and MCP artifacts
 are gitignored because failed OIDC navigation may contain temporary login
-parameters. The browser tests also create permanent, uniquely named local
+parameters, and token-management screenshots or traces can contain a new token.
+The browser tests also create permanent, uniquely named local
 namespace records. See [the UI guide](../../docs/browser-ui.md).
 
 MinIO data and Keycloak users/subjects live in named Docker volumes. Secrets and

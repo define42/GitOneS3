@@ -5,7 +5,7 @@ VERSION ?= $(shell git describe --tags --always --dirty)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 COMPOSE := docker compose
 
-.PHONY: all build ui ui-check test-ui clean test test-short lint lint-fix fmt audit run run-local stop logs smoke
+.PHONY: all build ui ui-check test-ui clean test test-short lint lint-fix fmt audit run run-local stop logs smoke smoke-git
 
 all: lint test build
 
@@ -61,6 +61,9 @@ logs:
 
 smoke:
 	$(COMPOSE) run --build --rm --no-deps smoke
+
+smoke-git:
+	python3 deploy/compose/git_smoke.py
 
 run-local: ui
 	$(GO) run ./cmd/gitone

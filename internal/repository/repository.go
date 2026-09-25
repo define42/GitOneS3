@@ -133,6 +133,8 @@ type snapshot struct {
 	metadata Metadata
 	refs     refsSnapshot
 	manifest objectManifest
+	state    storage.RepositoryState
+	version  storage.Version
 }
 
 // Store uses durable objects and the existing repository publication contract.
@@ -304,11 +306,11 @@ func (s *Store) load(ctx context.Context, namespace, name string) (snapshot, err
 		!validDescription(m.Description) || m.CreatedBy == "" || !validText(m.CreatedBy, 512) {
 		return snapshot{}, ErrCorrupt
 	}
-	state, _, err := s.repositories.LoadState(ctx, m.ID)
+	state, version, err := s.repositories.LoadState(ctx, m.ID)
 	if err != nil {
 		return snapshot{}, fmt.Errorf("load published repository state: %w", errors.Join(ErrCorrupt, err))
 	}
-	result := snapshot{metadata: m}
+	result := snapshot{metadata: m, state: state, version: version}
 	if err := s.readSnapshot(ctx, m.ID, state.RefsSnapshot, &result.refs); err != nil {
 		return snapshot{}, err
 	}
@@ -321,13 +323,12 @@ func (s *Store) load(ctx context.Context, namespace, name string) (snapshot, err
 	}
 	for id, info := range result.manifest.Objects {
 		if !objectIDPattern.MatchString(id) || !digestPattern.MatchString(info.SHA256) || info.Size < 0 || info.Size > maxObjectBytes ||
-			(info.Type != "blob" && info.Type != "tree" && info.Type != "commit") {
+			(info.Type != "blob" && info.Type != "tree" && info.Type != "commit" && info.Type != "tag") {
 			return snapshot{}, ErrCorrupt
 		}
 	}
 	for ref, id := range result.refs.Refs {
-		branch, ok := strings.CutPrefix(ref, "refs/heads/")
-		if !ok || !validBranch(branch) || !objectIDPattern.MatchString(id) || result.manifest.Objects[id].Type != "commit" {
+		if !ValidRef(ref) || !objectIDPattern.MatchString(id) || result.manifest.Objects[id].Type == "" || (strings.HasPrefix(ref, "refs/heads/") && result.manifest.Objects[id].Type != "commit") {
 			return snapshot{}, ErrCorrupt
 		}
 	}

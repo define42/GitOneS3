@@ -71,6 +71,22 @@ export interface RepositoryCommit {
   createdAt: string;
   parents: string[];
 }
+export type TokenPermission = "read" | "write";
+export interface AccessToken {
+  id: string;
+  name: string;
+  username: string;
+  permission: TokenPermission;
+  repositories: string[];
+  allRepositories?: boolean;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string;
+}
+export interface CreatedAccessToken {
+  token: string;
+  metadata: AccessToken;
+}
 export class APIError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -154,7 +170,8 @@ export function safeReturnTo(value: string | null): string {
         params.getAll(key).length === 1 &&
         !/[\\\u0000-\u001f\u007f]/.test(entry),
     );
-  if (["/", "/auth/new-group"].includes(path)) return query ? "/" : value;
+  if (["/", "/auth/new-group", "/auth/tokens"].includes(path))
+    return query ? "/" : value;
   if (path === "/auth/new-repository")
     return validQuery(["namespace"]) &&
       (!params.has("namespace") ||
