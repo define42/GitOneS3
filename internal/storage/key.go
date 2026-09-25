@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"fmt"
 	"path"
 	"strings"
 	"unicode/utf8"
@@ -17,6 +18,26 @@ func ValidateKey(key string) error {
 // ValidatePrefix validates a non-empty object prefix and permits one trailing slash.
 func ValidatePrefix(prefix string) error {
 	return validateKey(strings.TrimSuffix(prefix, "/"))
+}
+
+// ValidateListPage checks the shared bounds and cursor rules for paged listings.
+func ValidateListPage(prefix, after string, limit int) error {
+	if err := ValidatePrefix(prefix); err != nil {
+		return fmt.Errorf("invalid page prefix: %w", err)
+	}
+	if limit < 1 || limit > MaxListPageSize {
+		return fmt.Errorf("page size must be between 1 and %d", MaxListPageSize)
+	}
+	if after == "" {
+		return nil
+	}
+	if err := ValidateKey(after); err != nil {
+		return fmt.Errorf("invalid page cursor: %w", err)
+	}
+	if !strings.HasPrefix(after, prefix) {
+		return errors.New("page cursor is outside the requested prefix")
+	}
+	return nil
 }
 
 func validateKey(key string) error {

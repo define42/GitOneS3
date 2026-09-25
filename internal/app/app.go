@@ -11,7 +11,6 @@ import (
 	"strconv"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/define42/GitOneS3/internal/auth"
@@ -23,7 +22,6 @@ import (
 	"github.com/define42/GitOneS3/internal/repository"
 	"github.com/define42/GitOneS3/internal/shard"
 	"github.com/define42/GitOneS3/internal/sshserver"
-	"github.com/define42/GitOneS3/internal/storage/s3store"
 	"github.com/define42/GitOneS3/internal/webui"
 )
 
@@ -44,41 +42,15 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		logger = slog.Default()
 	}
 
-	identity, err := config.LoadClusterIdentity(cfg.ClusterIdentityFile)
+	resources, err := openShard(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("load immutable cluster identity: %w", err)
+		return nil, err
 	}
-	if err := cfg.ValidateClusterIdentity(identity); err != nil {
-		return nil, fmt.Errorf("validate immutable cluster identity: %w", err)
-	}
-
-	awsConfig, err := awsconfig.LoadDefaultConfig(
-		ctx,
-		awsconfig.WithRegion(cfg.S3.Region),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("load AWS configuration: %w", err)
-	}
-	s3Client := s3.NewFromConfig(awsConfig, configureS3Client(cfg.S3))
-	objectStore, err := s3store.New(s3Client, cfg.S3.Bucket)
-	if err != nil {
-		return nil, fmt.Errorf("create shard object store: %w", err)
-	}
-	if err := objectStore.Check(ctx); err != nil {
-		return nil, fmt.Errorf("check shard object store: %w", err)
-	}
-
-	pathPolicy := shard.DefaultPathPolicy()
-	pathPolicy.MaxTopLevelLength = cfg.Path.MaxTopLevelLength
-	pathPolicy.MaxComponentLength = cfg.Path.MaxComponentLength
-	pathPolicy.MaxPathDepth = cfg.Path.MaxDepth
-	parser, err := shard.NewParser(pathPolicy)
-	if err != nil {
-		return nil, fmt.Errorf("create canonical path parser: %w", err)
-	}
-	router, err := shard.NewRouter(cfg.ShardCount, parser)
-	if err != nil {
-		return nil, fmt.Errorf("create shard router: %w", err)
+	objectStore, parser, router := resources.store, resources.parser, resources.router
+	if cfg.Auth.Enabled && cfg.SpaceDiscoveryMode != "scan" {
+		if err := auth.InitializeSpaceIndex(ctx, objectStore, router, shard.ShardID(cfg.LocalShard)); err != nil {
+			return nil, fmt.Errorf("initialize space discovery index: %w", err)
+		}
 	}
 	destinationResolver, err := proxy.NewStatefulSetResolver(proxy.StatefulSetResolverOptions{
 		Scheme:          cfg.InternalScheme,
@@ -116,7 +88,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 			Config: cfg.Auth, LocalShard: shard.ShardID(cfg.LocalShard),
 			Router: router, Store: objectStore, Provider: provider, Next: ownerHandler,
 			TokenResolver: destinationResolver, TokenTransport: forwardTransport,
-			SSHPublicURL: cfg.SSH.PublicURL,
+			SSHPublicURL: cfg.SSH.PublicURL, SpaceDiscoveryMode: cfg.SpaceDiscoveryMode,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create authentication handler: %w", err)

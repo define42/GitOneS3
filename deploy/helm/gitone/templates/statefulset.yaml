@@ -72,6 +72,8 @@ spec:
               protocol: TCP
             {{- end }}
           env:
+            - name: GITONE_SPACE_DISCOVERY_MODE
+              value: {{ .Values.spaceDiscoveryMode | quote }}
             - name: GITONE_SSH_ENABLED
               value: {{ .Values.ssh.enabled | quote }}
             {{- if .Values.ssh.enabled }}

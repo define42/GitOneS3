@@ -11,6 +11,7 @@ x-gitone: &gitone
       required: false # make run generates this before starting the stack
   environment: &gitone-env
     GITONE_SHARD_COUNT: "4"
+    GITONE_SPACE_DISCOVERY_MODE: ${GITONE_SPACE_DISCOVERY_MODE:-indexed}
     POD_NAMESPACE: local
     GITONE_AUTH_ENABLED: "true"
     GITONE_SSH_ENABLED: "true"

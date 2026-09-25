@@ -23,6 +23,7 @@ const (
 	DefaultMaxTopLevelLength   = 63
 	DefaultMaxComponentLength  = 255
 	DefaultMaxPathDepth        = 32
+	DefaultSpaceDiscoveryMode  = "indexed"
 
 	DefaultMaxPackCount             = uint32(32)
 	DefaultMaxSmallPackCount        = uint32(16)
@@ -51,6 +52,7 @@ type Config struct {
 	HeadlessService     string
 	Namespace           string
 	ClusterIdentityFile string
+	SpaceDiscoveryMode  string
 	S3                  S3
 	Pack                PackPolicy
 	Path                PathPolicy
@@ -199,6 +201,7 @@ func Load(lookup LookupEnv) (Config, error) {
 		HeadlessService:     value(lookup, "GITONE_HEADLESS_SERVICE", DefaultHeadlessService),
 		Namespace:           requiredValue(lookup, "POD_NAMESPACE"),
 		ClusterIdentityFile: value(lookup, "GITONE_CLUSTER_IDENTITY_FILE", DefaultClusterIdentityFile),
+		SpaceDiscoveryMode:  value(lookup, "GITONE_SPACE_DISCOVERY_MODE", DefaultSpaceDiscoveryMode),
 		S3: S3{
 			Endpoint:     value(lookup, "GITONE_S3_ENDPOINT", ""),
 			Region:       value(lookup, "GITONE_S3_REGION", DefaultS3Region),
@@ -235,6 +238,11 @@ func Load(lookup LookupEnv) (Config, error) {
 
 // Validate checks invariants that must hold before the process accepts traffic.
 func (c Config) Validate() error {
+	switch c.SpaceDiscoveryMode {
+	case "", "scan", "indexed":
+	default:
+		return fmt.Errorf("config: space discovery mode must be scan or indexed")
+	}
 	if err := c.SSH.validate(c.Auth.Enabled, c.PublicPort); err != nil {
 		return err
 	}

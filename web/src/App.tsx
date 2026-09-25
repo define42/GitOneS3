@@ -5,6 +5,7 @@ import type { Group, Role, Session, Space } from "./api";
 import { NewRepository, RepositoryList, RepositoryPage } from "./Repositories";
 import { TokensPage } from "./Tokens";
 import { SSHKeysPage } from "./SSHKeys";
+import { loadSpaces } from "./spaces";
 import { ThemeControl } from "./ThemeControl";
 
 function Icon({
@@ -410,25 +411,19 @@ function Dashboard({ session }: { session: Session }) {
   const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
     setError("");
-    Promise.all(
-      Array.from({ length: session.shardCount }, (_, shard) =>
-        api<{ spaces: Space[] }>(`/spaces?shard=${shard}`),
-      ),
-    )
-      .then((results) => {
-        if (active)
-          setSpaces(
-            results
-              .flatMap((r) => r.spaces)
-              .sort((a, b) => a.name.localeCompare(b.name)),
-          );
+    setSpaces(null);
+    loadSpaces(session.shardCount, controller.signal)
+      .then((result) => {
+        if (active) setSpaces(result);
       })
       .catch((e) => {
         if (active) setError(errorMessage(e));
       });
     return () => {
       active = false;
+      controller.abort();
     };
   }, [session.shardCount, refresh]);
   const invited = spaces?.filter((s) => s.invited) ?? [];

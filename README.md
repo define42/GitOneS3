@@ -49,6 +49,8 @@ Git/LFS client -> public Service -> any gitone-N
   permanent username-to-provider-identity bindings.
 - Shared user/group namespace claims, creator ownership, accepted invitations,
   group member roles, and conditional membership updates that preserve an owner.
+- Paginated per-user shared-space discovery with authoritative membership checks
+  and an explicit [existing-store migration](docs/space-discovery.md).
 - Huma-backed, typed JSON APIs with generated OpenAPI and a GitHub-inspired
   React/TypeScript interface for registration, login, logout, and shared groups.
 - Private repository creation and browsing in personal or shared namespaces,
@@ -110,6 +112,7 @@ from the mounted cluster identity.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `GITONE_SPACE_DISCOVERY_MODE` | `indexed` | Shared-space discovery; use `scan` during the [two-phase migration](docs/space-discovery.md) |
 | `GITONE_SHARD_COUNT` | required | Permanent routing modulus |
 | `POD_NAME` | required | Canonical `gitone-N` owner ordinal |
 | `POD_NAMESPACE` | required | Kubernetes namespace for stable DNS |

@@ -5,6 +5,15 @@ one public Service, and one headless Service for direct shard forwarding. The
 StatefulSet replica count and the mounted cluster identity both come from
 `shardCount`; there is no independent replica setting.
 
+## Shared-space discovery upgrades
+
+`spaceDiscoveryMode` defaults to `indexed`. Existing stores without a completed
+index refuse startup in this mode. Deploy the new image with
+`spaceDiscoveryMode: scan`, replace **all** old writer pods (the StatefulSet uses
+`OnDelete`), run `gitone backfill-space-index` on every shard, then switch to
+`indexed` and replace pods again. Do not backfill while any older writer remains.
+See the [migration and rollback procedure](../../../docs/space-discovery.md).
+
 ## Google OIDC
 
 Enable authentication with:

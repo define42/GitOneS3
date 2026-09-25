@@ -187,6 +187,7 @@ func TestAPIAvailabilityAndUserLookup(t *testing.T) {
 func TestAPIGroupLifecycleAndPrivateDiscovery(t *testing.T) {
 	t.Parallel()
 	s := testService(t, 0, storage.NewMemoryStore(), &fakeProvider{}, nil)
+	initializeTestSpaceIndex(t, s)
 	handler := s.newAPIHandler()
 	owner, ownerCSRF := groupSession(t, s, "alice", "alice-id")
 	member, memberCSRF := groupSession(t, s, "bob", "bob-id")
@@ -300,6 +301,9 @@ func TestAPIOpenAPIAndCrossShardForwarding(t *testing.T) {
 		testService(t, 0, stores[0], &fakeProvider{}, nil),
 		testService(t, 1, stores[1], &fakeProvider{}, nil),
 	}
+	for _, service := range services {
+		initializeTestSpaceIndex(t, service)
+	}
 	// Use the same owner check as Service.ServeHTTP while keeping this test focused
 	// on the API contract and its proxy resolver integration.
 	handlers := make([]http.Handler, len(services))
@@ -388,6 +392,7 @@ func TestAPIRoutesAcrossFourShards(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		initializeTestSpaceIndex(t, services[i])
 		for candidate := 0; ; candidate++ {
 			name := fmt.Sprintf("team-%d", candidate)
 			owner, err := router.Owner(name)

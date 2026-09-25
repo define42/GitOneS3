@@ -209,6 +209,12 @@ func isNamespaceConflict(err error) bool {
 func (s *Service) createGroup(ctx context.Context, name, creator string) (namespaceRecord, error) {
 	record := namespaceRecord{SchemaVersion: 1, Type: groupNamespace, CreatorUserID: creator,
 		Members: map[string]string{creator: "owner"}}
+	if err := validateNamespace(record); err != nil {
+		return namespaceRecord{}, err
+	}
+	if err := s.ensureSpaceCandidate(ctx, name, creator); err != nil {
+		return namespaceRecord{}, err
+	}
 	err := s.writeNamespace(ctx, name, record, "")
 	if isNamespaceConflict(err) {
 		return namespaceRecord{}, errNamespaceTaken
@@ -289,6 +295,17 @@ func (s *Service) updateGroup(ctx context.Context, name, caller, action, target,
 		}
 		if owners == 0 {
 			return namespaceRecord{}, errLastOwner
+		}
+		// Candidates precede new grants. A failed CAS leaves only a harmless
+		// candidate; publishing first could strand a membership after a crash.
+		if action == "invite" || action == "accept" {
+			id := target
+			if action == "accept" {
+				id = caller
+			}
+			if err := s.ensureSpaceCandidate(ctx, name, id); err != nil {
+				return namespaceRecord{}, err
+			}
 		}
 		err = s.writeNamespace(ctx, name, record, version)
 		if isNamespaceConflict(err) {

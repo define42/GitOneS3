@@ -24,6 +24,7 @@ func TestLoadDefaults(t *testing.T) {
 		HeadlessService:     DefaultHeadlessService,
 		Namespace:           "gitone-system",
 		ClusterIdentityFile: DefaultClusterIdentityFile,
+		SpaceDiscoveryMode:  DefaultSpaceDiscoveryMode,
 		S3: S3{
 			Region:       DefaultS3Region,
 			UseTLS:       true,
@@ -161,6 +162,37 @@ func TestLoadRejectsNilLookup(t *testing.T) {
 	_, err := Load(nil)
 	if err == nil || !strings.Contains(err.Error(), "lookup is nil") {
 		t.Errorf("Load(nil) error = %v, want nil lookup error", err)
+	}
+}
+
+func TestSpaceDiscoveryMode(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name  string
+		mode  string
+		valid bool
+	}{
+		{name: "scan", mode: "scan", valid: true},
+		{name: "indexed", mode: "indexed", valid: true},
+		{name: "empty uses indexed", mode: "", valid: true},
+		{name: "unknown", mode: "automatic"},
+		{name: "uppercase", mode: "INDEXED"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			environment := baseEnvironment()
+			environment["GITONE_SPACE_DISCOVERY_MODE"] = test.mode
+			cfg, err := Load(testLookup(environment))
+			if !test.valid {
+				if err == nil || !strings.Contains(err.Error(), "space discovery mode") {
+					t.Fatalf("Load() error = %v, want invalid discovery mode", err)
+				}
+				return
+			}
+			if err != nil || cfg.SpaceDiscoveryMode != test.mode {
+				t.Fatalf("Load() mode = %q, error = %v", cfg.SpaceDiscoveryMode, err)
+			}
+		})
 	}
 }
 

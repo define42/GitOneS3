@@ -200,6 +200,46 @@ func (s *MemoryStore) List(ctx context.Context, prefix string) ([]ObjectInfo, er
 	return objects, nil
 }
 
+// ListPage scans the in-memory index while retaining only one page and a lookahead key.
+func (s *MemoryStore) ListPage(ctx context.Context, prefix, after string, limit int) (ObjectPage, error) {
+	if err := ctx.Err(); err != nil {
+		return ObjectPage{}, fmt.Errorf("list page %q: %w", prefix, err)
+	}
+	if err := ValidateListPage(prefix, after, limit); err != nil {
+		return ObjectPage{}, fmt.Errorf("list page %q: %w", prefix, err)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	keys := make([]string, 0, limit+1)
+	for key := range s.objects {
+		if err := ctx.Err(); err != nil {
+			return ObjectPage{}, fmt.Errorf("list page %q: %w", prefix, err)
+		}
+		if key <= after || !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		position, _ := slices.BinarySearch(keys, key)
+		if position > limit {
+			continue
+		}
+		if len(keys) < limit+1 {
+			keys = append(keys, "")
+		}
+		copy(keys[position+1:], keys[position:])
+		keys[position] = key
+	}
+	page := ObjectPage{Objects: make([]ObjectInfo, 0, min(len(keys), limit))}
+	if len(keys) > limit {
+		keys = keys[:limit]
+		page.NextAfter = keys[len(keys)-1]
+	}
+	for _, key := range keys {
+		page.Objects = append(page.Objects, objectInfo(key, s.objects[key]))
+	}
+	return page, nil
+}
+
 func readExactly(ctx context.Context, body io.Reader, size int64) ([]byte, error) {
 	limited := io.LimitReader(&contextReader{ctx: ctx, reader: body}, size+1)
 	data, err := io.ReadAll(limited)

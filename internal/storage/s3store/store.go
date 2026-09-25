@@ -358,6 +358,71 @@ func (s *Store) List(ctx context.Context, prefix string) ([]storage.ObjectInfo, 
 	return objects, nil
 }
 
+// ListPage fetches one bounded, lexicographically ordered S3 page. It uses full
+// exclusive keys rather than provider-specific continuation tokens.
+func (s *Store) ListPage(
+	ctx context.Context,
+	prefix, after string,
+	limit int,
+) (storage.ObjectPage, error) {
+	if err := ctx.Err(); err != nil {
+		return storage.ObjectPage{}, fmt.Errorf("list page %q: %w", prefix, err)
+	}
+	if err := storage.ValidateListPage(prefix, after, limit); err != nil {
+		return storage.ObjectPage{}, fmt.Errorf("list page %q: %w", prefix, err)
+	}
+	input := &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(prefix),
+		// #nosec G115 -- ValidateListPage bounds limit to 1..1000 above.
+		MaxKeys: aws.Int32(int32(limit)),
+	}
+	if after != "" {
+		input.StartAfter = aws.String(after)
+	}
+	output, err := s.client.ListObjectsV2(ctx, input)
+	if err != nil {
+		return storage.ObjectPage{}, classifyError("list page", prefix, err)
+	}
+	if output == nil || output.IsTruncated == nil {
+		return storage.ObjectPage{}, errors.New("list page response is missing pagination metadata")
+	}
+	if len(output.Contents) > limit || len(output.CommonPrefixes) != 0 {
+		return storage.ObjectPage{}, errors.New("list page response exceeds the requested object bounds")
+	}
+	if output.KeyCount != nil && int64(*output.KeyCount) != int64(len(output.Contents)) {
+		return storage.ObjectPage{}, errors.New("list page response has an inconsistent key count")
+	}
+	if *output.IsTruncated && len(output.Contents) == 0 {
+		return storage.ObjectPage{}, errors.New("list page response is truncated without advancing")
+	}
+	page := storage.ObjectPage{Objects: make([]storage.ObjectInfo, 0, len(output.Contents))}
+	previous := after
+	for _, object := range output.Contents {
+		key := aws.ToString(object.Key)
+		if err := storage.ValidateKey(key); err != nil {
+			return storage.ObjectPage{}, fmt.Errorf("list page response contains an invalid key: %w", err)
+		}
+		if !strings.HasPrefix(key, prefix) || key <= previous {
+			return storage.ObjectPage{}, errors.New("list page response is outside its prefix or not strictly ordered")
+		}
+		if object.Size != nil && *object.Size < 0 {
+			return storage.ObjectPage{}, errors.New("list page response contains a negative object size")
+		}
+		page.Objects = append(page.Objects, storage.ObjectInfo{
+			Key:          key,
+			Size:         aws.ToInt64(object.Size),
+			Version:      storage.Version(aws.ToString(object.ETag)),
+			LastModified: aws.ToTime(object.LastModified),
+		})
+		previous = key
+	}
+	if *output.IsTruncated {
+		page.NextAfter = previous
+	}
+	return page, nil
+}
+
 func classifyError(operation, key string, err error) error {
 	switch statusCode(err) {
 	case 404:

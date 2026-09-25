@@ -25,6 +25,10 @@ service:
 
 listenAddress: 0.0.0.0
 
+# Existing stores: deploy all writers in scan mode, backfill every shard, then
+# switch to indexed. See docs/space-discovery.md before upgrading.
+spaceDiscoveryMode: indexed
+
 ssh:
   enabled: false
   port: 2222

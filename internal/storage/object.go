@@ -36,6 +36,17 @@ type ObjectInfo struct {
 	LastModified time.Time
 }
 
+// MaxListPageSize bounds one object listing request.
+const MaxListPageSize = 1000
+
+// ObjectPage contains a lexicographically ordered page of object metadata.
+// NextAfter is the last returned key when more objects exist, otherwise empty.
+// Pages are not a snapshot across requests; concurrent changes may affect later pages.
+type ObjectPage struct {
+	Objects   []ObjectInfo
+	NextAfter string
+}
+
 // PutOptions controls conditional object publication.
 type PutOptions struct {
 	IfMatch     Version
@@ -53,4 +64,8 @@ type ObjectStore interface {
 	Head(ctx context.Context, key string) (ObjectInfo, error)
 	Delete(ctx context.Context, key string, ifMatch Version) error
 	List(ctx context.Context, prefix string) ([]ObjectInfo, error)
+	// ListPage returns at most limit objects strictly after the full key after.
+	// An empty after starts the listing; otherwise it must be a valid key within
+	// prefix. The limit must be between 1 and MaxListPageSize, inclusive.
+	ListPage(ctx context.Context, prefix, after string, limit int) (ObjectPage, error)
 }

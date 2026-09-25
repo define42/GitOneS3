@@ -58,7 +58,9 @@ type userOutput struct {
 }
 
 type spacesInput struct {
-	Shard uint32 `query:"shard" required:"true" minimum:"0"`
+	Shard  uint32 `query:"shard" required:"true" minimum:"0"`
+	Cursor string `query:"cursor" maxLength:"4096"`
+	Limit  int    `query:"limit" default:"100" minimum:"1" maximum:"100"`
 }
 
 type spaceView struct {
@@ -70,7 +72,8 @@ type spaceView struct {
 
 type spacesOutput struct {
 	Body struct {
-		Spaces []spaceView `json:"spaces"`
+		Spaces     []spaceView `json:"spaces"`
+		NextCursor string      `json:"nextCursor,omitempty"`
 	}
 }
 
@@ -131,7 +134,7 @@ func (s *Service) resolveAPI(r *http.Request) (shard.Route, error) {
 	}
 	if r.URL.Path == "/api/v1/spaces" {
 		query, err := url.ParseQuery(r.URL.RawQuery)
-		if err != nil || len(query["shard"]) != 1 {
+		if err != nil || len(query["shard"]) != 1 || len(query["cursor"]) > 1 || len(query["limit"]) > 1 {
 			return shard.Route{}, errors.New("exactly one shard is required")
 		}
 		value := query.Get("shard")
@@ -301,40 +304,28 @@ func (s *Service) apiSpaces(ctx context.Context, input *spacesInput) (*spacesOut
 	if input.Shard != uint32(s.local) {
 		return nil, huma.Error400BadRequest("invalid shard")
 	}
-	objects, err := s.store.List(ctx, "auth/users/")
+	current := currentAPISession(ctx)
+	if !current.isAuthenticated {
+		return nil, huma.Error401Unauthorized("authentication required")
+	}
+	if input.Limit < 1 || input.Limit > spacePageSize {
+		return nil, huma.Error400BadRequest("invalid space page size")
+	}
+	id := userID(current.current.Identity)
+	after, err := s.decodeSpaceCursor(input.Cursor, id)
 	if err != nil {
-		return nil, apiError(err)
+		return nil, huma.Error400BadRequest("invalid space cursor")
 	}
-	// This first implementation scans local namespace records. Bound the work
-	// and fail visibly rather than silently omitting memberships in large shards.
-	if len(objects) > 10000 {
-		return nil, huma.Error503ServiceUnavailable("space discovery limit reached")
+	spaces, next, err := s.listSpaces(ctx, id, after, input.Limit)
+	if err != nil {
+		return nil, huma.Error503ServiceUnavailable("space discovery unavailable")
 	}
-	id := userID(currentAPISession(ctx).current.Identity)
 	output := &spacesOutput{}
-	output.Body.Spaces = make([]spaceView, 0)
-	for _, object := range objects {
-		if err := ctx.Err(); err != nil {
-			return nil, apiError(err)
-		}
-		name, ok := strings.CutPrefix(object.Key, "auth/users/")
-		if !ok || !strings.HasSuffix(name, ".json") {
-			continue
-		}
-		name = strings.TrimSuffix(name, ".json")
-		record, _, err := s.loadNamespace(ctx, name)
+	output.Body.Spaces = spaces
+	if next != "" {
+		output.Body.NextCursor, err = s.encodeSpaceCursor(next, id)
 		if err != nil {
-			return nil, apiError(err)
-		}
-		if record.Type != groupNamespace {
-			continue
-		}
-		role, invited := record.Members[id], false
-		if role == "" {
-			role, invited = record.Invitations[id], true
-		}
-		if role != "" {
-			output.Body.Spaces = append(output.Body.Spaces, spaceView{Name: name, Type: groupNamespace, Role: role, Invited: invited})
+			return nil, huma.Error503ServiceUnavailable("space discovery unavailable")
 		}
 	}
 	return output, nil

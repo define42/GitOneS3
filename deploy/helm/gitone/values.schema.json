@@ -8,6 +8,7 @@
     "serviceAccount",
     "service",
     "listenAddress",
+    "spaceDiscoveryMode",
     "auth",
     "s3",
     "clusterIdentity",
@@ -67,6 +68,7 @@
       }
     },
     "listenAddress": {"type": "string", "minLength": 1},
+    "spaceDiscoveryMode": {"type": "string", "enum": ["scan", "indexed"]},
     "ssh": {
       "type": "object",
       "additionalProperties": false,

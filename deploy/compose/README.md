@@ -12,6 +12,11 @@ bucket/realm setup is needed. The first build needs internet access and can take
 several minutes (allow about 6 GB RAM for building MinIO and running the stack).
 Later starts reuse the build cache and persistent data.
 
+If upgrading persistent data from a release without the shared-space discovery
+index, follow the [scan → backfill → indexed migration](../../docs/space-discovery.md#docker-compose)
+before starting in the default indexed mode. `make run` never migrates existing
+namespace data automatically.
+
 The command generates local secrets and TLS material, builds the images, creates
 four S3 buckets, imports the Keycloak realm, and waits for all services to become
 healthy. These are four Compose containers representing the Kubernetes shard

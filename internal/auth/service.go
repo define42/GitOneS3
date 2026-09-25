@@ -72,37 +72,45 @@ func Subject(ctx context.Context) (authz.Subject, bool) {
 
 // Options supplies only shard-local storage; callbacks are routed before use.
 type Options struct {
-	Config         config.Auth
-	LocalShard     shard.ShardID
-	Router         *shard.Router
-	Store          storage.ObjectStore
-	Provider       Provider
-	Next           http.Handler
-	TokenResolver  TokenResolver
-	TokenTransport http.RoundTripper
-	SSHPublicURL   string
+	Config             config.Auth
+	LocalShard         shard.ShardID
+	Router             *shard.Router
+	Store              storage.ObjectStore
+	Provider           Provider
+	Next               http.Handler
+	TokenResolver      TokenResolver
+	TokenTransport     http.RoundTripper
+	SSHPublicURL       string
+	SpaceDiscoveryMode string
 }
 
 // Service resolves callback state on any pod and authenticates on the owner.
 type Service struct {
-	local         shard.ShardID
-	router        *shard.Router
-	store         storage.ObjectStore
-	repositories  *repository.Store
-	provider      Provider
-	next          http.Handler
-	origin        string
-	issuer        string
-	callbackPath  string
-	loginCodec    *securecookie.SecureCookie
-	sessionCodec  *securecookie.SecureCookie
-	api           http.Handler
-	tokenResolver TokenResolver
-	tokenClient   *http.Client
-	sshPublicURL  string
+	local              shard.ShardID
+	router             *shard.Router
+	store              storage.ObjectStore
+	repositories       *repository.Store
+	provider           Provider
+	next               http.Handler
+	origin             string
+	issuer             string
+	callbackPath       string
+	loginCodec         *securecookie.SecureCookie
+	sessionCodec       *securecookie.SecureCookie
+	api                http.Handler
+	tokenResolver      TokenResolver
+	tokenClient        *http.Client
+	sshPublicURL       string
+	spaceDiscoveryMode string
 }
 
 func New(options Options) (*Service, error) {
+	if options.SpaceDiscoveryMode == "" {
+		options.SpaceDiscoveryMode = "indexed"
+	}
+	if options.SpaceDiscoveryMode != "scan" && options.SpaceDiscoveryMode != "indexed" {
+		return nil, errors.New("space discovery mode must be scan or indexed")
+	}
 	if err := options.Config.Validate(); err != nil {
 		return nil, err
 	}
@@ -124,8 +132,9 @@ func New(options Options) (*Service, error) {
 		local: options.LocalShard, router: options.Router, store: options.Store,
 		repositories: repositories,
 		provider:     options.Provider, next: options.Next, origin: options.Config.PublicURL,
-		tokenResolver: options.TokenResolver,
-		sshPublicURL:  options.SSHPublicURL,
+		tokenResolver:      options.TokenResolver,
+		sshPublicURL:       options.SSHPublicURL,
+		spaceDiscoveryMode: options.SpaceDiscoveryMode,
 		tokenClient: &http.Client{Transport: options.TokenTransport, Timeout: 5 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		issuer: options.Config.IssuerURL(), callbackPath: options.Config.CallbackPath(),

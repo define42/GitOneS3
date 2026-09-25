@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api, errorMessage, validRepositoryName } from "./api";
+import { loadSpaces } from "./spaces";
 import type {
   Repository,
   RepositoryBlob,
@@ -213,17 +214,15 @@ export function NewRepository({ session }: { session: Session }) {
   }, [error]);
   useEffect(() => {
     let active = true;
-    Promise.all(
-      Array.from({ length: session.shardCount }, (_, shard) =>
-        api<{ spaces: Space[] }>(`/spaces?shard=${shard}`),
-      ),
-    )
-      .then((results) => {
+    const controller = new AbortController();
+    setGroups(null);
+    setOwnerError("");
+    loadSpaces(session.shardCount, controller.signal)
+      .then((spaces) => {
         if (!active) return;
-        const writable = results
-          .flatMap((result) => result.spaces)
-          .filter((space) => !space.invited && space.role !== "reader")
-          .sort((a, b) => a.name.localeCompare(b.name));
+        const writable = spaces.filter(
+          (space) => !space.invited && space.role !== "reader",
+        );
         setGroups(writable);
         if (
           requestedOwner &&
@@ -241,6 +240,7 @@ export function NewRepository({ session }: { session: Session }) {
       });
     return () => {
       active = false;
+      controller.abort();
     };
   }, [requestedOwner, session.shardCount, session.username]);
   async function submit(event: FormEvent<HTMLFormElement>) {

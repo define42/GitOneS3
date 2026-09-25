@@ -3,13 +3,13 @@ import { flushSync } from "react-dom";
 import type { FormEvent } from "react";
 import { api, errorMessage } from "./api";
 import { SettingsNavigation } from "./SettingsNavigation";
+import { loadSpaces } from "./spaces";
 import type {
   AccessToken,
   CreatedAccessToken,
   Repository,
   RepositoryList,
   Session,
-  Space,
   TokenPermission,
 } from "./api";
 
@@ -134,19 +134,13 @@ export function TokensPage({ session }: { session: Session }) {
     let active = true;
     const controller = new AbortController();
     setScopeError("");
+    setRepositories(null);
     async function loadRepositories() {
-      const results = await Promise.all(
-        Array.from({ length: session.shardCount }, (_, shard) =>
-          api<{ spaces: Space[] }>(`/spaces?shard=${shard}`, {
-            signal: controller.signal,
-          }),
-        ),
-      );
+      const spaces = await loadSpaces(session.shardCount, controller.signal);
       const namespaces = [
         ...new Set([
           session.username!,
-          ...results
-            .flatMap((result) => result.spaces)
+          ...spaces
             .filter((space) => !space.invited)
             .map((space) => space.name),
         ]),
