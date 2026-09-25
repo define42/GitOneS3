@@ -81,7 +81,12 @@ func TestOIDCLoginAndIssuerIsolation(t *testing.T) {
 			store := storage.NewMemoryStore()
 			s := testOIDCService(t, store, provider)
 			login := httptest.NewRecorder()
-			s.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/alice/auth/oidc/login", nil))
+			s.ServeHTTP(login, httptest.NewRequestWithContext(
+				t.Context(),
+				http.MethodGet,
+				"/alice/auth/oidc/login",
+				nil,
+			))
 			if login.Code != http.StatusFound {
 				t.Fatalf("OIDC login = %d", login.Code)
 			}
@@ -112,7 +117,12 @@ func TestOIDCLoginAndIssuerIsolation(t *testing.T) {
 			if cookie == nil || !cookie.Secure || !cookie.HttpOnly {
 				t.Fatal("secure session cookie missing")
 			}
-			request := httptest.NewRequest(http.MethodGet, "/alice/auth/session", nil)
+			request := httptest.NewRequestWithContext(
+				t.Context(),
+				http.MethodGet,
+				"/alice/auth/session",
+				nil,
+			)
 			request.AddCookie(cookie)
 			if _, err := other.readSession(request); err == nil {
 				t.Fatal("Keycloak session accepted by Google configuration")
@@ -156,7 +166,12 @@ func testService(t *testing.T, local shard.ShardID, store storage.ObjectStore, p
 func startLogin(t *testing.T, handler http.Handler) (string, *http.Cookie) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/alice/auth/google/login", nil))
+	handler.ServeHTTP(w, httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/alice/auth/google/login",
+		nil,
+	))
 	if w.Code != http.StatusFound {
 		t.Fatalf("login status = %d: %s", w.Code, w.Body.String())
 	}
@@ -187,7 +202,12 @@ func responseCookie(t *testing.T, w *httptest.ResponseRecorder, name string) *ht
 }
 
 func callbackRequest(state string, cookie *http.Cookie) *http.Request {
-	r := httptest.NewRequest(http.MethodGet, CallbackPath+"?"+url.Values{"code": {"valid-code"}, "state": {state}}.Encode(), nil)
+	r := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		CallbackPath+"?"+url.Values{"code": {"valid-code"}, "state": {state}}.Encode(),
+		nil,
+	)
 	if cookie != nil {
 		r.AddCookie(cookie)
 	}
@@ -246,7 +266,12 @@ func TestLoginCallbackAndSessionAcrossShardsAndRestart(t *testing.T) {
 		t.Fatal("entry shard touched auth storage")
 	}
 	for _, path := range []string{"/alice", "/alice/", "/alice/auth/session", "/alice/repo.git/info/refs"} {
-		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r := httptest.NewRequestWithContext(
+			t.Context(),
+			http.MethodGet,
+			path,
+			nil,
+		)
 		r.AddCookie(cookie)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)
@@ -328,7 +353,10 @@ func TestCallbackBrowserBindingAndErrors(t *testing.T) {
 				browser = nil
 			}
 			if name == "wrong browser" {
-				browser.Value = "wrong-browser"
+				browser = &http.Cookie{
+					Name: loginCookie, Value: "wrong-browser", Path: "/",
+					Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+				}
 			}
 			r := callbackRequest(state, browser)
 			if name == "duplicate cookie" {
@@ -407,18 +435,30 @@ func TestSessionIsolationExpiryAndCSRF(t *testing.T) {
 		{"logout", "/alice/auth/logout", "POST", s.origin, current.CSRF, 204},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			r := httptest.NewRequest(test.method, test.path, nil)
-			c := *cookie
+			r := httptest.NewRequestWithContext(
+				t.Context(),
+				test.method,
+				test.path,
+				nil,
+			)
+			value := cookie.Value
 			if test.name == "tampered" {
-				c.Value = "x" + c.Value
+				value = "x" + value
 			}
 			if test.name == "expired" {
 				expired := current
 				expired.Expires = time.Now().Add(-time.Minute).Unix()
-				c.Value, _ = s.sessionCodec.Encode(sessionCookie, expired)
+				var err error
+				value, err = s.sessionCodec.Encode(sessionCookie, expired)
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			if test.name != "anonymous" {
-				r.AddCookie(&c)
+				r.AddCookie(&http.Cookie{
+					Name: cookie.Name, Value: value, Path: "/",
+					Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+				})
 			}
 			r.Header.Set("Origin", test.origin)
 			r.Header.Set("X-CSRF-Token", test.csrf)

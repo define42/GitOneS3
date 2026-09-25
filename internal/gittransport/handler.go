@@ -194,7 +194,7 @@ func readPkt(r *bytes.Reader) ([]byte, bool, error) {
 		return nil, false, err
 	}
 	for _, b := range header {
-		if !(b >= '0' && b <= '9') && !(b >= 'a' && b <= 'f') && !(b >= 'A' && b <= 'F') {
+		if (b < '0' || b > '9') && (b < 'a' || b > 'f') && (b < 'A' || b > 'F') {
 			return nil, false, errPack
 		}
 	}
@@ -357,7 +357,7 @@ func (h *Handler) receive(ctx context.Context, snap *repository.GitSnapshot, bod
 		if first {
 			command, caps, _ := strings.Cut(text, "\x00")
 			text = command
-			for _, capability := range strings.Fields(caps) {
+			for capability := range strings.FieldsSeq(caps) {
 				if capability != "report-status" && capability != "delete-refs" && capability != "ofs-delta" && capability != "atomic" && !strings.HasPrefix(capability, "agent=") {
 					return nil, errPack
 				}
@@ -385,6 +385,7 @@ func (h *Handler) receive(ctx context.Context, snap *repository.GitSnapshot, bod
 		var err error
 		incoming, err = decodePack(ctx, body[len(body)-r.Len():], snap.Objects)
 		if err != nil {
+			//lint:ignore nilerr Git reports unpack failures in report-status, not as an HTTP transport error.
 			return receiveStatus(updates, "invalid pack", "unpack failed"), nil
 		}
 	}
@@ -428,7 +429,7 @@ func validID(id string) bool {
 		return false
 	}
 	for _, b := range []byte(id) {
-		if !(b >= '0' && b <= '9') && !(b >= 'a' && b <= 'f') {
+		if (b < '0' || b > '9') && (b < 'a' || b > 'f') {
 			return false
 		}
 	}

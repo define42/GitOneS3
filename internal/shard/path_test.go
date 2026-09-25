@@ -263,9 +263,9 @@ func newTestParser(t *testing.T) *Parser {
 
 func newRequest(t *testing.T, target string) *http.Request {
 	t.Helper()
-	request, err := http.NewRequest(http.MethodGet, "http://gitone.test"+target, nil)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://gitone.test"+target, nil)
 	if err != nil {
-		t.Fatalf("http.NewRequest() error = %v", err)
+		t.Fatalf("http.NewRequestWithContext() error = %v", err)
 	}
 	return request
 }

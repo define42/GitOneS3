@@ -49,8 +49,13 @@ func New(address string, handler http.Handler, logger *slog.Logger) (*Server, er
 
 // Run serves until context cancellation or a listener failure, then shuts down.
 func (s *Server) Run(ctx context.Context) error {
-	listener, err := net.Listen("tcp", s.httpServer.Addr)
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(ctx, "tcp", s.httpServer.Addr)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// Cancellation is a normal shutdown, including during listener setup.
+			return nil
+		}
 		return fmt.Errorf("listen HTTP: %w", err)
 	}
 	s.logger.InfoContext(ctx, "http server starting", "address", listener.Addr().String())

@@ -59,7 +59,12 @@ func TestAPITokenLifecycleAndCSRF(t *testing.T) {
 		t.Fatal("metadata list failed or exposed verifier")
 	}
 	verify := func(raw string, cookie *http.Cookie) *httptest.ResponseRecorder {
-		r := httptest.NewRequest("POST", path+"/verify", nil)
+		r := httptest.NewRequestWithContext(
+			t.Context(),
+			"POST",
+			path+"/verify",
+			nil,
+		)
 		if raw != "" {
 			r.SetBasicAuth("alice", raw)
 		}
@@ -141,7 +146,12 @@ func TestAPITokenRepositorySelection(t *testing.T) {
 			if test.all && (created.Metadata.Repositories == nil || len(created.Metadata.Repositories) != 0) {
 				t.Fatal("all scope should return an empty list")
 			}
-			request := httptest.NewRequest("POST", path+"/verify", nil)
+			request := httptest.NewRequestWithContext(
+				t.Context(),
+				"POST",
+				path+"/verify",
+				nil,
+			)
 			request.SetBasicAuth("alice", created.Token)
 			verified := httptest.NewRecorder()
 			s.ServeHTTP(verified, request)

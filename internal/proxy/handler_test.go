@@ -67,7 +67,7 @@ func TestHandlerServesOwnerLocallyAndStripsUntrustedHeaders(t *testing.T) {
 		response.WriteHeader(http.StatusNoContent)
 	})
 	handler := proxyTestHandler(t, 0, nil, next)
-	request := httptest.NewRequest(http.MethodGet, "/acme/repo.git/info/refs", nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/acme/repo.git/info/refs", nil)
 	request.Header.Set("Authorization", "Bearer original")
 	request.Header.Set("X-User", "attacker")
 	request.Header.Set("X-GitOne-Role", "owner")
@@ -109,7 +109,8 @@ func TestHandlerForwardsDirectlyAndReplacesSpoofedHeaders(t *testing.T) {
 		}, nil
 	})
 	handler := proxyTestHandler(t, 0, transport, http.NotFoundHandler())
-	request := httptest.NewRequest(
+	request := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		"/alice/repo.git/git-receive-pack?trace=1",
 		strings.NewReader("push body"),
@@ -177,7 +178,9 @@ func TestHandlerForwardsToOwnerWithoutCredentials(t *testing.T) {
 		return response.Result(), nil
 	})
 	entry := proxyTestHandler(t, 0, transport, http.NotFoundHandler())
-	request := httptest.NewRequest(http.MethodGet, "/alice/repo.git/info/refs?service=git-upload-pack", nil)
+	request := httptest.NewRequestWithContext(
+		t.Context(), http.MethodGet, "/alice/repo.git/info/refs?service=git-upload-pack", nil,
+	)
 	response := httptest.NewRecorder()
 
 	entry.ServeHTTP(response, request)
@@ -198,7 +201,7 @@ func TestHandlerAcceptsForwardedRequestOnlyAtOwner(t *testing.T) {
 			assertInternalHeadersAbsent(t, request.Header)
 		})
 		handler := proxyTestHandler(t, 0, nil, next)
-		request := httptest.NewRequest(http.MethodGet, "/acme/repo.git/info/refs", nil)
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/acme/repo.git/info/refs", nil)
 		setForwardedRequest(request)
 
 		handler.ServeHTTP(httptest.NewRecorder(), request)
@@ -223,7 +226,7 @@ func TestHandlerAcceptsForwardedRequestOnlyAtOwner(t *testing.T) {
 				Next:       http.NotFoundHandler(),
 			},
 		)
-		request := httptest.NewRequest(http.MethodGet, "/alice/repo.git/info/refs", nil)
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/alice/repo.git/info/refs", nil)
 		setForwardedRequest(request)
 		response := httptest.NewRecorder()
 
@@ -243,7 +246,7 @@ func TestHandlerRejectsInvalidPathBeforeRouting(t *testing.T) {
 	var nextCalled bool
 	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { nextCalled = true })
 	handler := proxyTestHandler(t, 0, nil, next)
-	request := httptest.NewRequest(http.MethodGet, "/Alice/repo.git", nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/Alice/repo.git", nil)
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -273,7 +276,7 @@ func TestHandlerReportsResolutionAndTransportFailures(t *testing.T) {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(
 			response,
-			httptest.NewRequest(http.MethodGet, "/alice/repo.git", nil),
+			httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/alice/repo.git", nil),
 		)
 		if response.Code != http.StatusBadGateway {
 			t.Fatalf("status = %d, expected bad gateway", response.Code)
@@ -289,7 +292,7 @@ func TestHandlerReportsResolutionAndTransportFailures(t *testing.T) {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(
 			response,
-			httptest.NewRequest(http.MethodGet, "/alice/repo.git", nil),
+			httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/alice/repo.git", nil),
 		)
 		if response.Code != http.StatusBadGateway {
 			t.Fatalf("status = %d, expected bad gateway", response.Code)
@@ -313,7 +316,7 @@ func TestHandlerStreamsRequestWithoutPrebuffering(t *testing.T) {
 	})
 	handler := proxyTestHandler(t, 0, transport, http.NotFoundHandler())
 	bodyReader, bodyWriter := io.Pipe()
-	request := httptest.NewRequest(http.MethodPost, "/alice/repo.git/git-receive-pack", bodyReader)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/alice/repo.git/git-receive-pack", bodyReader)
 	response := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
@@ -353,7 +356,7 @@ func TestHandlerStreamsResponseBeforeUpstreamEOF(t *testing.T) {
 	go func() {
 		handler.ServeHTTP(
 			observed,
-			httptest.NewRequest(http.MethodGet, "/alice/repo.git/git-upload-pack", nil),
+			httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/alice/repo.git/git-upload-pack", nil),
 		)
 		close(done)
 	}()
@@ -384,7 +387,7 @@ func TestHandlerPropagatesRequestCancellation(t *testing.T) {
 	})
 	handler := proxyTestHandler(t, 0, transport, http.NotFoundHandler())
 	ctx, cancel := context.WithCancel(context.Background())
-	request := httptest.NewRequest(http.MethodGet, "/alice/repo.git/info/refs", nil).WithContext(ctx)
+	request := httptest.NewRequestWithContext(ctx, http.MethodGet, "/alice/repo.git/info/refs", nil)
 	response := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {

@@ -89,7 +89,7 @@ func NewParser(policy PathPolicy) (*Parser, error) {
 	for _, name := range policy.ReservedNames {
 		if err := validateTopLevel(name, policy.MaxTopLevelLength); err != nil {
 			return nil, fmt.Errorf(
-				"%w: reserved name %q: %v",
+				"%w: reserved name %q: %w",
 				ErrInvalidPathPolicy,
 				name,
 				err,

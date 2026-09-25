@@ -36,7 +36,9 @@ func TestTokenLifecycleAndStoredVerifier(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, err := io.ReadAll(body)
-	body.Close()
+	if closeErr := body.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +105,9 @@ func TestTokenRepositorySelectionPersistence(t *testing.T) {
 				t.Fatal(err)
 			}
 			data, err := io.ReadAll(body)
-			body.Close()
+			if closeErr := body.Close(); closeErr != nil {
+				t.Fatal(closeErr)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

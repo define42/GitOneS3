@@ -32,7 +32,12 @@ func TestUILoginModes(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			request := httptest.NewRequest(http.MethodGet, "/alice/auth/oidc/login?mode="+tt.mode+"&ui=1&returnTo=%2Fteam%2Finvitations%2Faccept", nil)
+			request := httptest.NewRequestWithContext(
+				t.Context(),
+				http.MethodGet,
+				"/alice/auth/oidc/login?mode="+tt.mode+"&ui=1&returnTo=%2Fteam%2Finvitations%2Faccept",
+				nil,
+			)
 			response := httptest.NewRecorder()
 			s.ServeHTTP(response, request)
 			location, err := url.Parse(response.Header().Get("Location"))
@@ -64,7 +69,12 @@ func TestUIRegistrationRemainsAtomic(t *testing.T) {
 	provider := &fakeProvider{identity: Identity{Subject: "alice"}}
 	s := testService(t, 1, storage.NewMemoryStore(), provider, nil)
 	login := httptest.NewRecorder()
-	s.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/alice/auth/oidc/login?mode=register&ui=1", nil))
+	s.ServeHTTP(login, httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/alice/auth/oidc/login?mode=register&ui=1",
+		nil,
+	))
 	location, err := url.Parse(login.Header().Get("Location"))
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +106,12 @@ func TestUIRejectsUnsafeReturnPaths(t *testing.T) {
 	for _, target := range []string{"https://evil.example/", "//evil.example/", "/%2fevil", "/alice/../bob", "/alice?next=x", "/alice#fragment", "/alice/auth/oidc/login", "/auth/oidc/callback", "/api/v1/session", "/alice\\evil"} {
 		t.Run(target, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			s.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/alice/auth/oidc/login?returnTo="+url.QueryEscape(target), nil))
+			s.ServeHTTP(response, httptest.NewRequestWithContext(
+				t.Context(),
+				http.MethodGet,
+				"/alice/auth/oidc/login?returnTo="+url.QueryEscape(target),
+				nil,
+			))
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("returnTo %q = %d", target, response.Code)
 			}
@@ -110,7 +125,12 @@ func TestUIAcceptsCanonicalReturnPaths(t *testing.T) {
 	for _, target := range []string{"/", "/auth/new-group", "/alice", "/alice/", "/team/settings", "/team/settings/", "/team/invitations/accept/"} {
 		t.Run(target, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			s.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/alice/auth/oidc/login?returnTo="+url.QueryEscape(target), nil))
+			s.ServeHTTP(response, httptest.NewRequestWithContext(
+				t.Context(),
+				http.MethodGet,
+				"/alice/auth/oidc/login?returnTo="+url.QueryEscape(target),
+				nil,
+			))
 			if response.Code != http.StatusFound {
 				t.Fatalf("returnTo %q = %d", target, response.Code)
 			}
@@ -135,7 +155,12 @@ func TestUIRepositoryReturnPathCodecBudget(t *testing.T) {
 			provider := &fakeProvider{identity: Identity{Subject: "alice"}}
 			s := testService(t, 1, storage.NewMemoryStore(), provider, nil)
 			response := httptest.NewRecorder()
-			s.ServeHTTP(response, httptest.NewRequest("GET", "/alice/auth/oidc/login?mode=register&ui=1&returnTo="+url.QueryEscape(test.target), nil))
+			s.ServeHTTP(response, httptest.NewRequestWithContext(
+				t.Context(),
+				"GET",
+				"/alice/auth/oidc/login?mode=register&ui=1&returnTo="+url.QueryEscape(test.target),
+				nil,
+			))
 			if response.Code != test.want {
 				t.Fatalf("login=%d, want %d: %s", response.Code, test.want, response.Body.String())
 			}
@@ -162,7 +187,12 @@ func TestUICallbackRejectsWrongAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	login := httptest.NewRecorder()
-	s.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/alice/auth/oidc/login?mode=login&ui=1", nil))
+	s.ServeHTTP(login, httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/alice/auth/oidc/login?mode=login&ui=1",
+		nil,
+	))
 	location, err := url.Parse(login.Header().Get("Location"))
 	if err != nil {
 		t.Fatal(err)

@@ -54,11 +54,16 @@ func TestRunStopsOnCancellation(t *testing.T) {
 
 func TestRunReportsListenFailure(t *testing.T) {
 	t.Parallel()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Errorf("close listener: %v", err)
+		}
+	})
 	server, err := New(listener.Addr().String(), http.NotFoundHandler(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +120,7 @@ func TestWithHealth(t *testing.T) {
 				response.WriteHeader(http.StatusAccepted)
 			})
 			handler := WithHealth(next, test.checker)
-			request := httptest.NewRequest(http.MethodGet, test.path, nil)
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, test.path, nil)
 			response := httptest.NewRecorder()
 
 			handler.ServeHTTP(response, request)

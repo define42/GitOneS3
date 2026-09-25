@@ -49,7 +49,12 @@ func TestResolveAPI(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			route, err := s.resolveAPI(httptest.NewRequest("GET", test.path, nil))
+			route, err := s.resolveAPI(httptest.NewRequestWithContext(
+				t.Context(),
+				"GET",
+				test.path,
+				nil,
+			))
 			if test.bad {
 				if err == nil {
 					t.Fatal("invalid routing input accepted")
@@ -72,7 +77,12 @@ func TestResolveAPI(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			r := httptest.NewRequest("GET", "/api/v1/names/alice", nil)
+			r := httptest.NewRequestWithContext(
+				t.Context(),
+				"GET",
+				"/api/v1/names/alice",
+				nil,
+			)
 			test.change(r)
 			if _, err := s.resolveAPI(r); err == nil {
 				t.Fatal("ambiguous request accepted")
@@ -91,7 +101,13 @@ func TestAPISessionAndLogout(t *testing.T) {
 		authenticated bool
 	}{
 		{"anonymous", nil, false},
-		{"invalid cookie", &http.Cookie{Name: sessionCookie, Value: "invalid"}, false},
+		{
+			name: "invalid cookie",
+			cookie: &http.Cookie{
+				Name: sessionCookie, Value: "invalid", Path: "/",
+				Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+			},
+		},
 		{"signed session", func() *http.Cookie { cookie, _ := groupSession(t, s, "alice", "alice-id"); return cookie }(), true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -256,7 +272,12 @@ func TestAPIRejectsUnsafeAndInvalidRequests(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			r := httptest.NewRequest("POST", "/api/v1/groups/acme/invitations", strings.NewReader(test.body))
+			r := httptest.NewRequestWithContext(
+				t.Context(),
+				"POST",
+				"/api/v1/groups/acme/invitations",
+				strings.NewReader(test.body),
+			)
 			r.Header.Set("Content-Type", "application/json")
 			r.Header.Set("Origin", test.origin)
 			r.Header.Set("X-CSRF-Token", test.csrf)
@@ -287,7 +308,7 @@ func TestAPIOpenAPIAndCrossShardForwarding(t *testing.T) {
 		handlers[i] = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			route, err := service.resolveAPI(r)
 			if err != nil || route.Owner != service.local {
-				http.Error(w, "incorrect owner", 502)
+				http.Error(w, "incorrect owner", http.StatusBadGateway)
 				return
 			}
 			api.ServeHTTP(w, r)

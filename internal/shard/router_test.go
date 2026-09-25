@@ -2,6 +2,7 @@ package shard
 
 import (
 	"errors"
+	"math"
 	"testing"
 )
 
@@ -40,6 +41,32 @@ func TestRouterOwnerUsesXXHashModuloShardCount(t *testing.T) {
 			}
 			if actual != test.expected {
 				t.Fatalf("Owner() = %d, expected %d", actual, test.expected)
+			}
+		})
+	}
+}
+
+func TestRouterOwnerShardCountBoundaries(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		shardCount uint32
+	}{
+		{name: "single shard", shardCount: 1},
+		{name: "maximum shard count", shardCount: math.MaxUint32},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			router := newTestRouter(t, test.shardCount)
+			for _, topLevel := range []string{"alice", "acme", "hello"} {
+				owner, err := router.Owner(topLevel)
+				if err != nil {
+					t.Fatalf("Owner(%q): %v", topLevel, err)
+				}
+				want := Sum64([]byte(topLevel)) % uint64(test.shardCount)
+				if uint64(owner) != want || uint32(owner) >= test.shardCount {
+					t.Errorf("Owner(%q) = %d, want %d below %d", topLevel, owner, want, test.shardCount)
+				}
 			}
 		})
 	}

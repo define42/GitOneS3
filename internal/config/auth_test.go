@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"maps"
 	"strings"
 	"testing"
 )
@@ -77,6 +78,7 @@ func TestLoadOIDC(t *testing.T) {
 	for _, test := range []struct{ name, key, value string }{
 		{name: "missing issuer", key: "GITONE_OIDC_ISSUER", value: ""},
 		{name: "insecure issuer", key: "GITONE_OIDC_ISSUER", value: "http://keycloak/realms/gitone"},
+		// #nosec G101 -- Deliberately invalid test credentials verify that issuer URLs reject userinfo.
 		{name: "issuer credentials", key: "GITONE_OIDC_ISSUER", value: "https://user:pass@example.com"},
 		{name: "issuer query", key: "GITONE_OIDC_ISSUER", value: "https://example.com?realm=gitone"},
 		{name: "issuer fragment", key: "GITONE_OIDC_ISSUER", value: "https://example.com/#realm"},
@@ -86,10 +88,7 @@ func TestLoadOIDC(t *testing.T) {
 		{name: "disabled OIDC", key: "GITONE_AUTH_ENABLED", value: "false"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			modified := make(map[string]string, len(env))
-			for key, value := range env {
-				modified[key] = value
-			}
+			modified := maps.Clone(env)
 			modified[test.key] = test.value
 			if _, err := Load(testLookup(modified)); err == nil {
 				t.Fatal("invalid OIDC configuration accepted")

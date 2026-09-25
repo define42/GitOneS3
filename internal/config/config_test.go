@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -253,6 +254,12 @@ func TestParseBytes(t *testing.T) {
 		{name: "explicit bytes", input: "128B", expected: 128},
 		{name: "mebibytes", input: "128MiB", expected: 128 << 20},
 		{name: "gibibytes", input: "2GiB", expected: 2 << 30},
+		{name: "maximum int64 bytes", input: "9223372036854775807B", expected: math.MaxInt64},
+		{name: "maximum kibibytes", input: "9007199254740991KiB", expected: math.MaxInt64 - 1023},
+		{name: "bytes exceed int64", input: "9223372036854775808B", wantError: true},
+		{name: "kibibytes exceed int64", input: "9007199254740992KiB", wantError: true},
+		{name: "maximum uint64 bytes", input: "18446744073709551615B", wantError: true},
+		{name: "multiplication exceeds uint64", input: "18446744073709551615TiB", wantError: true},
 		{name: "empty", input: "", wantError: true},
 		{name: "unsupported unit", input: "128MB", wantError: true},
 		{name: "overflow", input: "9223372036854775807GiB", wantError: true},

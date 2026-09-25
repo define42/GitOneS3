@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"context"
-	"crypto/sha1" // Git's established object format, not a security credential.
+	"crypto/sha1" // #nosec G505 -- Git's object format requires SHA-1; stored content is also verified with SHA-256.
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -46,7 +46,7 @@ func (s *Store) putObject(ctx context.Context, repositoryID, kind string, conten
 	raw := append([]byte(fmt.Sprintf("%s %d\x00", kind, len(content))), content...)
 	// SHA-1 provides Git compatibility. SHA-256 in the immutable manifest also
 	// verifies content on reads, avoiding reliance on SHA-1 collision resistance.
-	gitDigest := sha1.Sum(raw)
+	gitDigest := sha1.Sum(raw) // #nosec G401 -- Git object identity only; the manifest also records SHA-256.
 	strongDigest := sha256.Sum256(raw)
 	id := hex.EncodeToString(gitDigest[:])
 	var compressed bytes.Buffer
@@ -112,13 +112,13 @@ func (s *Store) object(ctx context.Context, snap snapshot, id, kind string) ([]b
 	raw, readErr := io.ReadAll(io.LimitReader(reader, maxObjectBytes+128))
 	closeErr := reader.Close()
 	if err := errors.Join(readErr, closeErr); err != nil {
-		return nil, fmt.Errorf("%w: invalid git object compression: %v", ErrCorrupt, err)
+		return nil, fmt.Errorf("%w: invalid git object compression: %w", ErrCorrupt, err)
 	}
 	header := []byte(fmt.Sprintf("%s %d\x00", kind, info.Size))
 	if int64(len(raw)) != int64(len(header))+info.Size || !bytes.HasPrefix(raw, header) {
 		return nil, ErrCorrupt
 	}
-	gitDigest := sha1.Sum(raw)
+	gitDigest := sha1.Sum(raw) // #nosec G401 -- Git object identity only; SHA-256 is independently checked below.
 	strongDigest := sha256.Sum256(raw)
 	if hex.EncodeToString(gitDigest[:]) != id || hex.EncodeToString(strongDigest[:]) != info.SHA256 {
 		return nil, ErrCorrupt
@@ -226,7 +226,7 @@ func (s *Store) entryAt(ctx context.Context, snap snapshot, commit, path string)
 	if path == "" {
 		return entry, nil
 	}
-	for _, component := range strings.Split(path, "/") {
+	for component := range strings.SplitSeq(path, "/") {
 		if entry.kind != "tree" {
 			return treeEntry{}, ErrNotFound
 		}
@@ -381,7 +381,7 @@ func (s *Store) commit(ctx context.Context, snap snapshot, id string) (Commit, s
 	commit := Commit{ID: id, Message: strings.TrimSuffix(message, "\n"), Parents: []string{}}
 	var tree string
 	var hasAuthor bool
-	for _, line := range strings.Split(header, "\n") {
+	for line := range strings.SplitSeq(header, "\n") {
 		key, value, ok := strings.Cut(line, " ")
 		if !ok {
 			return Commit{}, "", ErrCorrupt

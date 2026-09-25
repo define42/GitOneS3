@@ -148,7 +148,12 @@ func TestAPIRepositoryValidationAndCSRF(t *testing.T) {
 		{"wrong origin", "https://evil.example", csrf},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			r := httptest.NewRequest("POST", "/api/v1/repos/acme", strings.NewReader(`{"name":"project"}`))
+			r := httptest.NewRequestWithContext(
+				t.Context(),
+				"POST",
+				"/api/v1/repos/acme",
+				strings.NewReader(`{"name":"project"}`),
+			)
 			r.AddCookie(cookie)
 			r.Header.Set("Content-Type", "application/json")
 			r.Header.Set("Origin", test.origin)

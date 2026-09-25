@@ -33,7 +33,7 @@ func TestNewHandlerMissingBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	h.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	h.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "make ui") {
 		t.Fatalf("missing build response = %d %s", response.Code, response.Body.String())
 	}
@@ -92,7 +92,7 @@ func TestHandlerServeHTTP(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			h := testHandler(t, testFiles())
-			request := httptest.NewRequest(tt.method, tt.path, nil)
+			request := httptest.NewRequestWithContext(t.Context(), tt.method, tt.path, nil)
 			request.Header.Set("Accept", tt.accept)
 			request.Header.Set("Cookie", "session=opaque")
 			response := httptest.NewRecorder()
@@ -303,7 +303,7 @@ func TestHandlerRepositoryNavigation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			request := httptest.NewRequest(tt.method, tt.path, nil)
+			request := httptest.NewRequestWithContext(t.Context(), tt.method, tt.path, nil)
 			request.Header.Set("Accept", tt.accept)
 			request.Header.Set("Cookie", "session=opaque")
 			response := httptest.NewRecorder()
@@ -350,7 +350,7 @@ func TestHandlerServeAsset(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			h := testHandler(t, testFiles())
-			request := httptest.NewRequest(tt.method, tt.path, nil)
+			request := httptest.NewRequestWithContext(t.Context(), tt.method, tt.path, nil)
 			request.Header.Set("Accept", "text/html")
 			response := httptest.NewRecorder()
 			h.ServeHTTP(response, request)

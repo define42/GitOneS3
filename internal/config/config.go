@@ -527,5 +527,6 @@ func parseBytes(input string) (int64, error) {
 		return 0, fmt.Errorf("byte size overflows int64")
 	}
 
+	// #nosec G115 -- The bound above ensures the product fits int64 before conversion.
 	return int64(parsed * multiplier), nil
 }

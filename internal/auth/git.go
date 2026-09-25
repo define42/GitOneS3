@@ -70,17 +70,21 @@ func (s *Service) verifyToken(ctx context.Context, credentials tokenCredentials)
 	u := *destination
 	u.Path, u.RawPath = "/api/v1/users/"+credentials.username+"/tokens/verify", ""
 	u.RawQuery, u.Fragment = "", ""
+	// The validated username only selects the fixed verification path.
+	// #nosec G704 -- The resolver supplies a deployment-owned shard URL.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), nil)
 	if err != nil {
 		return tokenPrincipal{}, errors.New("invalid token authority request")
 	}
 	req.SetBasicAuth(credentials.username, credentials.raw)
 	req.Header.Set("Accept", "application/json")
+	// #nosec G704 -- The authority URL comes from the deployment resolver, and tokenClient refuses all redirects.
 	response, err := s.tokenClient.Do(req)
 	if err != nil {
 		return tokenPrincipal{}, errors.New("token authority unavailable")
 	}
-	defer response.Body.Close()
+	// Closing a read-only response cannot change the verification result.
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusUnauthorized {
 		return tokenPrincipal{}, errInvalidToken
 	}

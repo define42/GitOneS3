@@ -3,7 +3,7 @@ package repository
 import (
 	"bytes"
 	"context"
-	"crypto/sha1" // Git object identity; strong manifest hashes protect stored data.
+	"crypto/sha1" // #nosec G505 -- Git's object format requires SHA-1; stored content is also verified with SHA-256.
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -51,8 +51,12 @@ func ValidRef(ref string) bool {
 }
 
 func GitObjectID(object GitObject) string {
-	hash := sha1.New()
-	fmt.Fprintf(hash, "%s %d\x00", object.Type, len(object.Data))
+	hash := sha1.New() // #nosec G401 -- Git object identity only, not a credential or security checksum.
+	header := append([]byte(object.Type), ' ')
+	header = strconv.AppendInt(header, int64(len(object.Data)), 10)
+	header = append(header, 0)
+	// hash.Hash.Write always accepts the entire input and never returns an error.
+	hash.Write(header)
 	hash.Write(object.Data)
 	return hex.EncodeToString(hash.Sum(nil))
 }
@@ -99,7 +103,8 @@ func (s *Store) ReadGit(ctx context.Context, namespace, name string) (*GitSnapsh
 		result.Objects[id] = GitObject{Type: info.Type, Data: data}
 	}
 	if _, err := ReachableGit(ctx, result.References, result.Objects); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+		// Invalid persisted graphs are corruption, not invalid client input.
+		return nil, fmt.Errorf("%w: %s", ErrCorrupt, err.Error())
 	}
 	return result, nil
 }
@@ -201,7 +206,8 @@ func (s *Store) PublishGit(ctx context.Context, base *GitSnapshot, updates []Ref
 		return err
 	}
 	if err := authorize(ctx); err != nil {
-		return fmt.Errorf("%w: %v", ErrForbidden, err)
+		// The caller must classify any failed recheck as forbidden, not its cause.
+		return fmt.Errorf("%w: %s", ErrForbidden, err.Error())
 	}
 	if err := s.repositories.CompareAndSwapState(ctx, base.original.metadata.ID, base.original.version, next); err != nil {
 		if errors.Is(err, storage.ErrPreconditionFailed) || errors.Is(err, storage.ErrConditionalConflict) {
@@ -301,7 +307,7 @@ func gitLinks(object GitObject) ([]objectLink, error) {
 		var root, kind string
 		parents := 0
 		identities := map[string]bool{}
-		for _, line := range strings.Split(header, "\n") {
+		for line := range strings.SplitSeq(header, "\n") {
 			key, value, hasValue := strings.Cut(line, " ")
 			if !hasValue {
 				return nil, ErrInvalid

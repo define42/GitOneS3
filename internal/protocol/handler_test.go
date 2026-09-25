@@ -58,7 +58,7 @@ func TestHandler_ServeHTTP(t *testing.T) {
 			git := engineHandler("git")
 			lfs := engineHandler("lfs")
 			handler := NewHandler(git, lfs)
-			request := httptest.NewRequest(test.method, test.target, nil)
+			request := httptest.NewRequestWithContext(t.Context(), test.method, test.target, nil)
 			response := httptest.NewRecorder()
 
 			handler.ServeHTTP(response, request)
@@ -79,7 +79,8 @@ func TestHandler_UnimplementedEngine(t *testing.T) {
 	t.Parallel()
 
 	handler := NewHandler(nil, nil)
-	request := httptest.NewRequest(
+	request := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		"/acme/repo.git/git-upload-pack",
 		nil,

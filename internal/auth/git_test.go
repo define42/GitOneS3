@@ -67,7 +67,12 @@ func TestGitCredentialRules(t *testing.T) {
 		}, 204},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			r := httptest.NewRequest("GET", "/alice/project.git/info/refs?service=git-upload-pack", nil)
+			r := httptest.NewRequestWithContext(
+				t.Context(),
+				"GET",
+				"/alice/project.git/info/refs?service=git-upload-pack",
+				nil,
+			)
 			test.edit(r)
 			w := httptest.NewRecorder()
 			s.ServeHTTP(w, r)

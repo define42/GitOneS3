@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"context"
-	"crypto/sha1" // Required by Git's SHA-1 pack wire format.
+	"crypto/sha1" // #nosec G505 -- Git's SHA-1 pack wire format mandates this checksum; it is not authentication.
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -41,7 +41,7 @@ func decodePack(ctx context.Context, data []byte, existing map[string]repository
 	if (version != 2 && version != 3) || count > repository.MaxGitObjects {
 		return nil, errPack
 	}
-	sum := sha1.Sum(data[:len(data)-20])
+	sum := sha1.Sum(data[:len(data)-20]) // #nosec G401 -- Verify the Git-mandated pack checksum, not an authentication credential.
 	if !bytes.Equal(sum[:], data[len(data)-20:]) {
 		return nil, errPack
 	}
@@ -258,7 +258,7 @@ func applyDelta(base, delta []byte) ([]byte, error) {
 			continue
 		}
 		var offset, size uint32
-		for i := uint(0); i < 7; i++ {
+		for i := range uint(7) {
 			if op&(1<<i) == 0 {
 				continue
 			}
@@ -287,10 +287,14 @@ func applyDelta(base, delta []byte) ([]byte, error) {
 }
 
 func encodePack(ctx context.Context, objects map[string]repository.GitObject) ([]byte, error) {
+	count := len(objects)
+	if count > repository.MaxGitObjects {
+		return nil, repository.ErrLimit
+	}
 	var output bytes.Buffer
 	output.WriteString("PACK")
 	output.Write(binary.BigEndian.AppendUint32(nil, 2))
-	output.Write(binary.BigEndian.AppendUint32(nil, uint32(len(objects))))
+	output.Write(binary.BigEndian.AppendUint32(nil, uint32(count)))
 	ids := make([]string, 0, len(objects))
 	for id := range objects {
 		ids = append(ids, id)
@@ -334,7 +338,7 @@ func encodePack(ctx context.Context, objects map[string]repository.GitObject) ([
 			return nil, repository.ErrLimit
 		}
 	}
-	sum := sha1.Sum(output.Bytes())
+	sum := sha1.Sum(output.Bytes()) // #nosec G401 -- Emit the checksum required by Git's SHA-1 pack wire format.
 	output.Write(sum[:])
 	return output.Bytes(), nil
 }

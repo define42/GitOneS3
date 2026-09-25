@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"compress/zlib"
 	"context"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- Fixtures must use the checksum required by Git's SHA-1 pack wire format.
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/define42/GitOneS3/internal/repository"
@@ -50,7 +51,7 @@ func (p *packFixture) add(t *testing.T, kind byte, base, data []byte) int {
 func (p *packFixture) finish() []byte {
 	data := bytes.Clone(p.data)
 	binary.BigEndian.PutUint32(data[8:12], p.count)
-	sum := sha1.Sum(data)
+	sum := sha1.Sum(data) // #nosec G401 -- Produce the Git-mandated wire checksum for a pack fixture.
 	return append(data, sum[:]...)
 }
 
@@ -108,7 +109,7 @@ func TestDecodePackRejectsCorruption(t *testing.T) {
 	var fixture packFixture
 	fixture.add(t, 3, nil, []byte("test"))
 	valid := fixture.finish()
-	for cut := 0; cut < len(valid); cut++ {
+	for cut := range len(valid) {
 		if _, err := decodePack(context.Background(), valid[:cut], nil); err == nil {
 			t.Fatalf("accepted truncation %d", cut)
 		}
@@ -152,7 +153,7 @@ func TestDecodePackRejectsCorruption(t *testing.T) {
 				data = append(data[:len(data)-20], 0)
 				data = append(data, make([]byte, 20)...)
 			}
-			sum := sha1.Sum(data[:len(data)-20])
+			sum := sha1.Sum(data[:len(data)-20]) // #nosec G401 -- Repair the wire checksum so validation reaches the corrupted fields.
 			copy(data[len(data)-20:], sum[:])
 			if _, err := decodePack(context.Background(), data, nil); err == nil {
 				t.Fatal("accepted invalid pack")
@@ -214,6 +215,18 @@ func TestPackRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEncodePackRejectsObjectCountAboveLimit(t *testing.T) {
+	t.Parallel()
+	objects := make(map[string]repository.GitObject, repository.MaxGitObjects+1)
+	for i := range repository.MaxGitObjects + 1 {
+		objects[strconv.Itoa(i)] = repository.GitObject{Type: "blob"}
+	}
+	data, err := encodePack(t.Context(), objects)
+	if !errors.Is(err, repository.ErrLimit) || data != nil {
+		t.Fatalf("pack above object limit: got %d bytes, error %v", len(data), err)
+	}
+}
+
 func FuzzDecodePack(f *testing.F) {
 	f.Add([]byte("PACK"))
 	object := repository.GitObject{Type: "blob", Data: []byte("valid pack seed\n")}
@@ -231,7 +244,7 @@ func FuzzDecodePack(f *testing.F) {
 		// only the checksum so mutations can reach object and delta decoding.
 		if len(data) >= 32 {
 			checked := bytes.Clone(data)
-			sum := sha1.Sum(checked[:len(checked)-20])
+			sum := sha1.Sum(checked[:len(checked)-20]) // #nosec G401 -- Repair the Git wire checksum to fuzz object and delta decoding.
 			copy(checked[len(checked)-20:], sum[:])
 			_, _ = decodePack(context.Background(), checked, nil)
 		}

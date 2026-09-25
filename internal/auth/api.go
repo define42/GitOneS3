@@ -123,7 +123,7 @@ func (s *Service) resolveAPI(r *http.Request) (shard.Route, error) {
 			return shard.Route{}, errors.New("invalid api request target")
 		}
 	}
-	for _, part := range strings.Split(r.URL.Path, "/") {
+	for part := range strings.SplitSeq(r.URL.Path, "/") {
 		if part == "." || part == ".." {
 			return shard.Route{}, errors.New("invalid api path")
 		}

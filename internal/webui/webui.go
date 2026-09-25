@@ -159,7 +159,7 @@ func canonicalPath(r *http.Request) bool {
 }
 
 func acceptsHTML(accept string) bool {
-	for _, part := range strings.Split(accept, ",") {
+	for part := range strings.SplitSeq(accept, ",") {
 		mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(part))
 		if err != nil || mediaType != "text/html" {
 			continue

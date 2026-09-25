@@ -357,6 +357,8 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request, username string)
 		return
 	}
 	setCookie(w, loginCookie, browser, int(loginLifetime.Seconds()))
+	// Request data is encoded only in query parameters.
+	// #nosec G710 -- AuthorizationURL uses the configured OIDC provider endpoint.
 	http.Redirect(w, r, s.provider.AuthorizationURL(encodedState, nonce, verifier), http.StatusFound)
 }
 

@@ -22,6 +22,27 @@ func transportFixture(t *testing.T) (*Store, *GitSnapshot) {
 	return store, base
 }
 
+func TestGitObjectID(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		object GitObject
+		want   string
+	}{
+		{name: "empty blob", object: GitObject{Type: "blob"}, want: "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"},
+		{name: "blob reference vector", object: GitObject{Type: "blob", Data: []byte("test content\n")}, want: "d670460b4b4aece5915caf5c68d12f560a9fe3e4"},
+		{name: "empty tree", object: GitObject{Type: "tree"}, want: "4b825dc642cb6eb9a060e54bf8d69288fbee4904"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := GitObjectID(tt.object); got != tt.want {
+				t.Fatalf("GitObjectID() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPublishGitAtomicAndCAS(t *testing.T) {
 	t.Parallel()
 	store, base := transportFixture(t)
@@ -153,6 +174,18 @@ func TestPublishGitFailedDurabilityAndFinalAuthorization(t *testing.T) {
 	}
 }
 
+func TestPublishGitPreservesForbiddenClassification(t *testing.T) {
+	t.Parallel()
+	store, base := transportFixture(t)
+	head := base.References["refs/heads/main"]
+	err := store.PublishGit(t.Context(), base, []RefUpdate{{Name: "refs/heads/feature", New: head}}, nil, func(context.Context) error {
+		return ErrInvalid
+	})
+	if !errors.Is(err, ErrForbidden) || errors.Is(err, ErrInvalid) {
+		t.Fatalf("authorization error classification = %v", err)
+	}
+}
+
 func TestReadGitCorruption(t *testing.T) {
 	t.Parallel()
 	store, base := transportFixture(t)
@@ -161,5 +194,29 @@ func TestReadGitCorruption(t *testing.T) {
 	}
 	if _, err := store.ReadGit(context.Background(), "alice", "demo"); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("missing object = %v", err)
+	}
+}
+
+func TestReadGitInvalidGraphIsCorruption(t *testing.T) {
+	t.Parallel()
+	store, base := transportFixture(t)
+	manifest := base.original.manifest
+	for id, info := range manifest.Objects {
+		if info.Type == "tree" {
+			delete(manifest.Objects, id)
+		}
+	}
+	manifestKey, err := store.putSnapshot(t.Context(), base.original.metadata.ID, "manifest", manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := base.original.state
+	next.Generation++
+	next.PackManifest = manifestKey
+	if err := store.repositories.CompareAndSwapState(t.Context(), base.original.metadata.ID, base.original.version, next); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReadGit(t.Context(), "alice", "demo"); !errors.Is(err, ErrCorrupt) || errors.Is(err, ErrInvalid) {
+		t.Fatalf("persisted graph error classification = %v", err)
 	}
 }

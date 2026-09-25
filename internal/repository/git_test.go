@@ -35,7 +35,7 @@ func TestGitObjectCompatibility(t *testing.T) {
 	if id != "d670460b4b4aece5915caf5c68d12f560a9fe3e4" {
 		t.Fatalf("git blob id = %s", id)
 	}
-	git, err := exec.LookPath("git")
+	_, err = exec.LookPath("git")
 	if err != nil {
 		t.Log("native git unavailable; reference vector verified")
 		return
@@ -47,7 +47,17 @@ func TestGitObjectCompatibility(t *testing.T) {
 		}
 		// git hash-object parses trees and commits before accepting them, without
 		// a working tree or object writes. No shell interprets these arguments.
-		command := exec.CommandContext(ctx, git, "hash-object", "-t", info.Type, "--stdin")
+		var command *exec.Cmd
+		switch info.Type {
+		case "blob":
+			command = exec.CommandContext(ctx, "git", "hash-object", "-t", "blob", "--stdin")
+		case "tree":
+			command = exec.CommandContext(ctx, "git", "hash-object", "-t", "tree", "--stdin")
+		case "commit":
+			command = exec.CommandContext(ctx, "git", "hash-object", "-t", "commit", "--stdin")
+		default:
+			t.Fatalf("unexpected initial object type: %s", info.Type)
+		}
 		command.Stdin = bytes.NewReader(content)
 		output, err := command.CombinedOutput()
 		if err != nil {

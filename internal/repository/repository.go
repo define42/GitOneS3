@@ -360,7 +360,7 @@ func decodeJSON(data []byte, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("%w: invalid json: %v", ErrCorrupt, err)
+		return fmt.Errorf("%w: invalid json: %w", ErrCorrupt, err)
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return fmt.Errorf("%w: trailing json", ErrCorrupt)
@@ -391,7 +391,7 @@ func validBranch(branch string) bool {
 		strings.HasSuffix(branch, ".") || strings.ContainsFunc(branch, unicode.IsControl) {
 		return false
 	}
-	for _, component := range strings.Split(branch, "/") {
+	for component := range strings.SplitSeq(branch, "/") {
 		if component == "" || strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
 			return false
 		}

@@ -91,7 +91,7 @@ func isDNSName(name string) bool {
 	if name == "" || len(name) > 253 {
 		return false
 	}
-	for _, label := range strings.Split(name, ".") {
+	for label := range strings.SplitSeq(name, ".") {
 		if !isDNSLabel(label) {
 			return false
 		}

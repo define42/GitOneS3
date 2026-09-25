@@ -88,7 +88,7 @@ func TestHandlerDeadlines(t *testing.T) {
 			}
 			ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
 			defer cancel()
-			r := httptest.NewRequest(http.MethodGet, "/alice/demo.git/info/refs?service=git-upload-pack", nil).WithContext(ctx)
+			r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/alice/demo.git/info/refs?service=git-upload-pack", nil)
 			handler.ServeHTTP(w, r)
 			want := http.StatusOK
 			if failure != "" {
@@ -139,7 +139,7 @@ func TestHandlerValidation(t *testing.T) {
 		{"malformed pktline", "POST", "/alice/demo.git/git-upload-pack", "application/x-git-upload-pack-request", 400},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			r := httptest.NewRequest(tt.method, tt.path, strings.NewReader("garbage"))
+			r := httptest.NewRequestWithContext(t.Context(), tt.method, tt.path, strings.NewReader("garbage"))
 			r.Header.Set("Content-Type", tt.contentType)
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, r)
@@ -172,6 +172,21 @@ func TestUploadRejectsUnadvertisedWant(t *testing.T) {
 	_, err := h.upload(context.Background(), &repository.GitSnapshot{References: map[string]string{}, Objects: map[string]repository.GitObject{}}, []byte(pkt("want "+strings.Repeat("a", 40)+"\n")+"0000"+pkt("done\n")))
 	if err == nil {
 		t.Fatal("unadvertised object accepted")
+	}
+}
+
+func TestReceiveReportsInvalidPack(t *testing.T) {
+	t.Parallel()
+	h := &Handler{}
+	newID := strings.Repeat("a", 40)
+	body := []byte(pkt(zeroID+" "+newID+" refs/heads/main\x00report-status\n") + "0000invalid pack")
+	result, err := h.receive(t.Context(), &repository.GitSnapshot{}, body)
+	if err != nil {
+		t.Fatalf("unpack failure must use Git report-status, not a transport error: %v", err)
+	}
+	want := pkt("unpack invalid pack\n") + pkt("ng refs/heads/main unpack failed\n") + "0000"
+	if string(result) != want {
+		t.Fatalf("report-status = %q, want %q", result, want)
 	}
 }
 

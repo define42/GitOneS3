@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/define42/GitOneS3/internal/shard"
@@ -141,12 +142,7 @@ func (h *Handler) serveRemote(
 
 // hasForwardedMarker identifies a previous hop, not an authenticated caller.
 func hasForwardedMarker(header http.Header) bool {
-	for _, value := range exactHeaderValues(header, ForwardedHeader) {
-		if value == ForwardedHeaderValue {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(exactHeaderValues(header, ForwardedHeader), ForwardedHeaderValue)
 }
 
 func isValidDestination(destination *url.URL) bool {

@@ -28,11 +28,19 @@ func groupSession(t *testing.T, s *Service, username, subject string) (*http.Coo
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &http.Cookie{Name: sessionCookie, Value: value}, current.CSRF
+	return &http.Cookie{
+		Name: sessionCookie, Value: value, Path: "/",
+		Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+	}, current.CSRF
 }
 
 func groupRequest(handler http.Handler, method, path, body string, cookie *http.Cookie, csrf string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r := httptest.NewRequestWithContext(
+		context.Background(),
+		method,
+		path,
+		strings.NewReader(body),
+	)
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Origin", "https://git.example")
 	r.Header.Set("X-CSRF-Token", csrf)

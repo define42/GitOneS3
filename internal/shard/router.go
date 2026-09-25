@@ -53,6 +53,7 @@ func (r *Router) Owner(topLevel string) (ShardID, error) {
 	if _, isReserved := r.parser.reservedNames[topLevel]; isReserved {
 		return 0, fmt.Errorf("%w: %q", ErrReservedTopLevel, topLevel)
 	}
+	// #nosec G115 -- The remainder is below the nonzero uint32 shard count, so it fits ShardID.
 	return ShardID(Sum64([]byte(topLevel)) % uint64(r.shardCount)), nil
 }
 
