@@ -5,6 +5,7 @@ import type { Group, Role, Session, Space } from "./api";
 import { NewRepository, RepositoryList, RepositoryPage } from "./Repositories";
 import { TokensPage } from "./Tokens";
 import { SSHKeysPage } from "./SSHKeys";
+import { ThemeControl } from "./ThemeControl";
 
 function Icon({
   name = "branch",
@@ -92,10 +93,11 @@ function Avatar({ name, large = false }: { name: string; large?: boolean }) {
   );
 }
 
-function Header({ session }: { session: Session }) {
+function Header({ session }: { session: Session | null }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function logout() {
+    if (!session) return;
     setBusy(true);
     setError("");
     try {
@@ -120,43 +122,46 @@ function Header({ session }: { session: Session }) {
         <a href="/" className="header-link">
           Your spaces
         </a>
-        <div className="header-actions">
-          {session.authenticated ? (
-            <>
-              <a className="header-link new-link" href="/auth/new-repository">
-                <Icon name="plus" size={18} />
-                New repository
-              </a>
-              <a className="header-link new-link" href="/auth/new-group">
-                <Icon name="plus" size={18} />
-                New group
-              </a>
-              <a href={`/${session.username}`} className="account-link">
-                <Avatar name={session.username!} />
-                <span>{session.username}</span>
-              </a>
-              <a className="header-link" href="/auth/tokens">
-                Settings
-              </a>
-              <button
-                className="header-button"
-                onClick={logout}
-                disabled={busy}
-              >
-                {busy ? "Signing out…" : "Sign out"}
-              </button>
-            </>
-          ) : (
-            <>
-              <a className="header-link" href="/auth/login">
-                Sign in
-              </a>
-              <a className="header-button" href="/auth/register">
-                Create account
-              </a>
-            </>
-          )}
-        </div>
+        <ThemeControl />
+        {session && (
+          <div className="header-actions">
+            {session.authenticated ? (
+              <>
+                <a className="header-link new-link" href="/auth/new-repository">
+                  <Icon name="plus" size={18} />
+                  New repository
+                </a>
+                <a className="header-link new-link" href="/auth/new-group">
+                  <Icon name="plus" size={18} />
+                  New group
+                </a>
+                <a href={`/${session.username}`} className="account-link">
+                  <Avatar name={session.username!} />
+                  <span>{session.username}</span>
+                </a>
+                <a className="header-link" href="/auth/tokens">
+                  Settings
+                </a>
+                <button
+                  className="header-button"
+                  onClick={logout}
+                  disabled={busy}
+                >
+                  {busy ? "Signing out…" : "Sign out"}
+                </button>
+              </>
+            ) : (
+              <>
+                <a className="header-link" href="/auth/login">
+                  Sign in
+                </a>
+                <a className="header-button" href="/auth/register">
+                  Create account
+                </a>
+              </>
+            )}
+          </div>
+        )}
       </header>
       {error && (
         <div className="container">
@@ -1146,19 +1151,32 @@ export function App() {
   }, [session, publicPage, destination]);
   if (error)
     return (
-      <main id="main" className="narrow container">
-        <h1>GitOne is unavailable</h1>
-        <Notice>{error}</Notice>
-        <p>
-          Authentication or the API may not be configured. Check the server
-          configuration, then try again.
-        </p>
-        <button className="button" onClick={() => location.reload()}>
-          Try again
-        </button>
-      </main>
+      <>
+        <Header session={session} />
+        <main id="main" className="narrow container">
+          <h1>GitOne is unavailable</h1>
+          <Notice>{error}</Notice>
+          <p>
+            Authentication or the API may not be configured. Check the server
+            configuration, then try again.
+          </p>
+          <button className="button" onClick={() => location.reload()}>
+            Try again
+          </button>
+        </main>
+        <Footer />
+      </>
     );
-  if (!session) return <Loading text="Connecting to GitOne…" />;
+  if (!session)
+    return (
+      <>
+        <Header session={session} />
+        <main id="main">
+          <Loading text="Connecting to GitOne…" />
+        </main>
+        <Footer />
+      </>
+    );
   let content: ReactNode;
   if (path === "/auth/login" || path === "/auth/register")
     content = <Auth session={session} register={path === "/auth/register"} />;

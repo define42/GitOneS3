@@ -14,6 +14,22 @@ provide the UI's Huma session/group/repository API.
 
 ## User flows
 
+### Appearance
+
+Use the **Theme** selector in the top navigation to choose **System**, **Light**, or
+**Dark**. System is the default and follows operating-system appearance changes.
+An explicit choice is saved in this browser's local storage (`gitone.theme`),
+persists across navigation and sign-in/sign-out, and synchronizes between tabs.
+This is a device preference, not a server-side account setting. If browser
+storage is unavailable, switching still works for the current page.
+
+Themes cover public pages, repositories, groups, forms, and token/SSH settings.
+A small content-hashed, same-origin script applies the preference before the
+page is painted; the existing restrictive CSP remains unchanged. Semantic
+colors cover text, surfaces, borders, status messages, and keyboard focus.
+
+### Accounts and repositories
+
 1. Open `/auth/register`, choose an available lowercase username, and authenticate
    with the configured Google or generic OIDC provider. The verified provider
    identity permanently claims that username; an email match alone is not enough.
