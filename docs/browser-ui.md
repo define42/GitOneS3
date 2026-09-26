@@ -128,7 +128,7 @@ available for existing clients; browser navigation is selected with
 | `GET /api/v1/groups/{name}` | Read an authorized group view |
 | `POST /api/v1/groups/{name}` | Claim a group and make the caller owner |
 | `GET /api/v1/groups/{name}/invitation` | Read the caller's pending invitation |
-| `POST /api/v1/groups/{name}/invitations` | Invite a user with `{userId, role}` |
+| `POST /api/v1/groups/{name}/invitations` | Invite a user with `{userId, role}` and an optional verified `username` |
 | `DELETE /api/v1/groups/{name}/invitations` | Cancel an invitation with `{userId}` |
 | `POST /api/v1/groups/{name}/invitations/accept` | Accept the current user's invitation |
 | `PUT /api/v1/groups/{name}/members` | Change a role with `{userId, role}` |
@@ -146,6 +146,14 @@ session cookies authenticate requests; mutations also require the configured
 public `Origin` and the session's `X-CSRF-Token`. Group membership is read from
 the authoritative shard's S3 bucket and checked again during conditional
 updates. The UI is not an authorization boundary.
+
+Authorized group views include `memberUsernames` keyed by member user ID.
+Owners also receive `invitationUsernames` keyed by invitee user ID. Names come
+from registered user namespaces, including for memberships created before
+these response fields existed; unavailable names are omitted and their IDs
+appear in `unresolvedUserIds`. A successful mutation may include
+`usernameLookupError` if name lookup fails afterward. The stable IDs remain
+the values used for role and invitation mutations.
 
 Token management uses the browser session and CSRF protection, not another PAT.
 Selected-repository tokens require a nonempty `repositories` list; this is the

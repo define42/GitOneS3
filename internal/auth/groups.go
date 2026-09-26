@@ -18,20 +18,27 @@ import (
 )
 
 type groupView struct {
-	Name          string            `json:"name"`
-	Type          string            `json:"type"`
-	CreatorUserID string            `json:"creatorUserId"`
-	Role          string            `json:"role"`
-	Members       map[string]string `json:"members"`
-	Invitations   map[string]string `json:"invitations,omitempty"`
-	CSRF          string            `json:"csrfToken"`
+	Name                string            `json:"name"`
+	Type                string            `json:"type"`
+	CreatorUserID       string            `json:"creatorUserId"`
+	Role                string            `json:"role"`
+	Members             map[string]string `json:"members"`
+	MemberUsernames     map[string]string `json:"memberUsernames"`
+	Invitations         map[string]string `json:"invitations,omitempty"`
+	InvitationUsernames map[string]string `json:"invitationUsernames,omitempty"`
+	UnresolvedUserIDs   []string          `json:"unresolvedUserIds,omitempty"`
+	UsernameLookupError string            `json:"usernameLookupError,omitempty"`
+	CSRF                string            `json:"csrfToken"`
 }
 
-func writeGroup(w http.ResponseWriter, status int, name string, record namespaceRecord, current session) {
-	view := groupView{Name: name, Type: groupNamespace, CreatorUserID: record.CreatorUserID,
-		Role: record.Members[userID(current.Identity)], Members: record.Members, CSRF: current.CSRF}
-	if view.Role == "owner" {
-		view.Invitations = record.Invitations
+func (s *Service) writeGroup(w http.ResponseWriter, r *http.Request, status int, name string, record namespaceRecord, current session, mutation bool) {
+	view, err := s.groupView(r.Context(), name, record, current)
+	if err != nil {
+		if !mutation {
+			serverError(w)
+			return
+		}
+		view = fallbackGroupView(name, record, current)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -47,7 +54,7 @@ func (s *Service) serveCreateGroup(w http.ResponseWriter, r *http.Request, name 
 		return
 	}
 	w.Header().Set("Location", "/"+name+"/")
-	writeGroup(w, http.StatusCreated, name, record, current)
+	s.writeGroup(w, r, http.StatusCreated, name, record, current, true)
 }
 
 func (s *Service) serveGroup(w http.ResponseWriter, r *http.Request, name string, current session, record namespaceRecord) {
@@ -58,7 +65,7 @@ func (s *Service) serveGroup(w http.ResponseWriter, r *http.Request, name string
 			methodNotAllowed(w, "POST")
 			return
 		}
-		s.serveGroupUpdate(w, r, name, current, "accept", "", "")
+		s.serveGroupUpdate(w, r, name, current, "accept", "", "", "")
 		return
 	}
 	role := memberRole(record.Members[id])
@@ -72,7 +79,7 @@ func (s *Service) serveGroup(w http.ResponseWriter, r *http.Request, name string
 			methodNotAllowed(w, "GET, POST")
 			return
 		}
-		writeGroup(w, http.StatusOK, name, record, current)
+		s.writeGroup(w, r, http.StatusOK, name, record, current, false)
 		return
 	case "/invitations", "/members":
 		if role != authz.RoleOwner {
@@ -80,7 +87,7 @@ func (s *Service) serveGroup(w http.ResponseWriter, r *http.Request, name string
 			return
 		}
 		if r.Method == http.MethodGet {
-			writeGroup(w, http.StatusOK, name, record, current)
+			s.writeGroup(w, r, http.StatusOK, name, record, current, false)
 			return
 		}
 		action := ""
@@ -106,14 +113,15 @@ func (s *Service) serveGroup(w http.ResponseWriter, r *http.Request, name string
 			}
 		}
 		var input struct {
-			UserID string `json:"userId"`
-			Role   string `json:"role"`
+			UserID   string `json:"userId"`
+			Role     string `json:"role"`
+			Username string `json:"username"`
 		}
 		if err := decodeGroupJSON(w, r, &input); err != nil {
 			http.Error(w, "invalid member JSON", http.StatusBadRequest)
 			return
 		}
-		s.serveGroupUpdate(w, r, name, current, action, input.UserID, input.Role)
+		s.serveGroupUpdate(w, r, name, current, action, input.UserID, input.Role, input.Username)
 		return
 	}
 	required, err := requiredGroupRole(w, r)
@@ -129,9 +137,15 @@ func (s *Service) serveGroup(w http.ResponseWriter, r *http.Request, name string
 	s.next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), subjectKey{}, subject)))
 }
 
-func (s *Service) serveGroupUpdate(w http.ResponseWriter, r *http.Request, name string, current session, action, target, role string) {
+func (s *Service) serveGroupUpdate(w http.ResponseWriter, r *http.Request, name string, current session, action, target, role, username string) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	if action == "invite" && username != "" {
+		if err := s.prepareGroupInvitation(ctx, name, userID(current.Identity), target, username); err != nil {
+			groupError(w, err)
+			return
+		}
+	}
 	record, err := s.updateGroup(ctx, name, userID(current.Identity), action, target, role)
 	if err != nil {
 		groupError(w, err)
@@ -142,7 +156,16 @@ func (s *Service) serveGroupUpdate(w http.ResponseWriter, r *http.Request, name 
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	writeGroup(w, http.StatusOK, name, record, current)
+	if action == "invite" && username != "" {
+		if err := s.cacheVerifiedGroupUsername(ctx, name, target, username); err != nil {
+			view := fallbackGroupView(name, record, current)
+			markVerifiedInvitation(view, target, username)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(view)
+			return
+		}
+	}
+	s.writeGroup(w, r, http.StatusOK, name, record, current, true)
 }
 
 func decodeGroupJSON(w http.ResponseWriter, r *http.Request, output any) error {
@@ -230,6 +253,8 @@ func groupError(w http.ResponseWriter, err error) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 	case errors.Is(err, errNotGroup), errors.Is(err, errMemberNotFound), errors.Is(err, storage.ErrNotFound):
 		http.Error(w, "group, member, or invitation not found", http.StatusNotFound)
+	case errors.Is(err, errUserNotFound):
+		http.Error(w, "user not found", http.StatusNotFound)
 	case errors.Is(err, errInvalidMember):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:

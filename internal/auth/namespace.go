@@ -30,6 +30,7 @@ var (
 	errLastOwner      = errors.New("group must retain at least one owner")
 	errGroupConflict  = errors.New("group changed concurrently; retry the request")
 	errMemberNotFound = errors.New("member or invitation not found")
+	errUserNotFound   = errors.New("user not found")
 	errInvalidMember  = errors.New("invalid user ID or role")
 	errGroupFull      = errors.New("group member or invitation limit reached")
 )

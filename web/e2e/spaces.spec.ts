@@ -60,7 +60,21 @@ test("register, share a group, accept, change roles, revoke access, and sign out
         .click();
       await expect(page).toHaveURL(new RegExp(`/${group}(?:/settings)?/?$`));
       await page.goto(`/${group}/settings`);
+      const missing = `missing-${suffix}`;
+      await page.getByLabel("Invite username", { exact: true }).fill(missing);
+      await page
+        .getByRole("button", { name: "Send invitation", exact: true })
+        .click();
+      await expect(page.getByRole("alert")).toContainText(
+        `No GitOne user named ${missing} was found`,
+      );
+      await expect(page.getByLabel("Invite username", { exact: true }))
+        .toHaveAttribute("aria-invalid", "true");
+      await expect(page.getByLabel("Invite username", { exact: true }))
+        .toBeFocused();
       await page.getByLabel("Invite username", { exact: true }).fill(bob);
+      await expect(page.getByLabel("Invite username", { exact: true }))
+        .toHaveAttribute("aria-invalid", "false");
       await page
         .getByLabel("Invitation role", { exact: true })
         .selectOption("reader");
@@ -104,9 +118,12 @@ test("register, share a group, accept, change roles, revoke access, and sign out
         .filter({
           has: page.locator(`[data-user-id="${memberSession.userId}"]`),
         });
+      await expect(row.getByText(bob, { exact: true })).toBeVisible();
+      const groupView = await (await page.request.get(`/api/v1/groups/${group}`)).json();
+      expect(groupView.memberUsernames[memberSession.userId]).toBe(bob);
       await row.getByRole("combobox").selectOption("developer");
       await row
-        .getByRole("button", { name: "Update role", exact: true })
+        .getByRole("button", { name: `Update role for ${bob}`, exact: true })
         .click();
       await expect
         .poll(
@@ -116,7 +133,7 @@ test("register, share a group, accept, change roles, revoke access, and sign out
         )
         .toBe("developer");
       page.once("dialog", (dialog) => dialog.accept());
-      await row.getByRole("button", { name: "Remove", exact: true }).click();
+      await row.getByRole("button", { name: `Remove ${bob} from group`, exact: true }).click();
       await expect
         .poll(async () =>
           (await member.request.get(`/api/v1/groups/${group}`)).status(),
@@ -132,7 +149,7 @@ test("register, share a group, accept, change roles, revoke access, and sign out
         .filter({ hasText: `${alice} (you)` });
       await owner.getByRole("combobox").selectOption("reader");
       await owner
-        .getByRole("button", { name: "Update role", exact: true })
+        .getByRole("button", { name: `Update role for ${alice} (you)`, exact: true })
         .click();
       await expect(owner.getByRole("alert")).toContainText(
         "at least one owner",
@@ -148,7 +165,7 @@ test("register, share a group, accept, change roles, revoke access, and sign out
         });
       page.once("dialog", (dialog) => dialog.accept());
       await pending
-        .getByRole("button", { name: "Cancel invitation", exact: true })
+        .getByRole("button", { name: `Cancel invitation for ${bob}`, exact: true })
         .click();
       await expect(pending).toHaveCount(0);
       expect(
@@ -177,7 +194,7 @@ test("register, share a group, accept, change roles, revoke access, and sign out
         .getByTestId("member-row")
         .filter({ hasText: `${alice} (you)` });
       page.once("dialog", (dialog) => dialog.accept());
-      await owner.getByRole("button", { name: "Remove", exact: true }).click();
+      await owner.getByRole("button", { name: `Remove ${alice} (you) from group`, exact: true }).click();
       await expect(page).toHaveURL(`${baseURL}/`);
       expect((await page.request.get(`/api/v1/groups/${group}`)).status()).toBe(
         403,

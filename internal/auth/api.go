@@ -93,8 +93,9 @@ type invitationOutput struct {
 type memberInput struct {
 	Name string `path:"name" minLength:"1" maxLength:"63" pattern:"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"`
 	Body struct {
-		UserID string `json:"userId" minLength:"1" maxLength:"262"`
-		Role   string `json:"role" enum:"reader,developer,owner"`
+		UserID   string `json:"userId" minLength:"1" maxLength:"262"`
+		Role     string `json:"role" enum:"reader,developer,owner"`
+		Username string `json:"username,omitempty"`
 	}
 }
 
@@ -159,6 +160,7 @@ func (s *Service) resolveAPI(r *http.Request) (shard.Route, error) {
 
 func (s *Service) newAPIHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc(usernameLookupPath, s.serveUsernameLookup)
 	apiConfig := huma.DefaultConfig("GitOne API", "1.0.0")
 	apiConfig.OpenAPIPath = "/api/openapi"
 	apiConfig.DocsPath = "/api/docs"
@@ -213,23 +215,23 @@ func (s *Service) newAPIHandler() http.Handler {
 	registerAPI(api, "get-invitation", "GET", "/api/v1/groups/{name}/invitation", "Preview your group invitation", false, http.StatusOK, s.apiInvitation)
 	registerAPI(api, "invite-member", "POST", "/api/v1/groups/{name}/invitations", "Invite a user to a group", false, http.StatusOK,
 		func(ctx context.Context, input *memberInput) (*groupOutput, error) {
-			return s.apiUpdateGroup(ctx, input.Name, "invite", input.Body.UserID, input.Body.Role)
+			return s.apiUpdateGroup(ctx, input.Name, "invite", input.Body.UserID, input.Body.Role, input.Body.Username)
 		})
 	registerAPI(api, "cancel-invitation", "DELETE", "/api/v1/groups/{name}/invitations", "Cancel a group invitation", false, http.StatusOK,
 		func(ctx context.Context, input *removeMemberInput) (*groupOutput, error) {
-			return s.apiUpdateGroup(ctx, input.Name, "cancel", input.Body.UserID, "")
+			return s.apiUpdateGroup(ctx, input.Name, "cancel", input.Body.UserID, "", "")
 		})
 	registerAPI(api, "accept-invitation", "POST", "/api/v1/groups/{name}/invitations/accept", "Accept your group invitation", false, http.StatusOK,
 		func(ctx context.Context, input *nameInput) (*groupOutput, error) {
-			return s.apiUpdateGroup(ctx, input.Name, "accept", "", "")
+			return s.apiUpdateGroup(ctx, input.Name, "accept", "", "", "")
 		})
 	registerAPI(api, "set-member-role", "PUT", "/api/v1/groups/{name}/members", "Change a group member's role", false, http.StatusOK,
 		func(ctx context.Context, input *memberInput) (*groupOutput, error) {
-			return s.apiUpdateGroup(ctx, input.Name, "set-role", input.Body.UserID, input.Body.Role)
+			return s.apiUpdateGroup(ctx, input.Name, "set-role", input.Body.UserID, input.Body.Role, "")
 		})
 	registerAPI(api, "remove-member", "DELETE", "/api/v1/groups/{name}/members", "Remove a group member", false, http.StatusOK,
 		func(ctx context.Context, input *removeMemberInput) (*groupOutput, error) {
-			return s.apiUpdateGroup(ctx, input.Name, "remove", input.Body.UserID, "")
+			return s.apiUpdateGroup(ctx, input.Name, "remove", input.Body.UserID, "", "")
 		})
 	s.registerRepositoryAPI(api)
 	s.registerTokenAPI(api)
@@ -337,7 +339,11 @@ func (s *Service) apiCreateGroup(ctx context.Context, input *nameInput) (*groupO
 	if err != nil {
 		return nil, apiError(err)
 	}
-	return &groupOutput{Status: http.StatusCreated, Location: "/" + input.Name + "/", Body: apiGroupView(input.Name, record, current)}, nil
+	view, err := s.groupView(ctx, input.Name, record, current)
+	if err != nil {
+		view = fallbackGroupView(input.Name, record, current)
+	}
+	return &groupOutput{Status: http.StatusCreated, Location: "/" + input.Name + "/", Body: view}, nil
 }
 
 func (s *Service) apiGroup(ctx context.Context, input *nameInput) (*groupOutput, error) {
@@ -352,7 +358,11 @@ func (s *Service) apiGroup(ctx context.Context, input *nameInput) (*groupOutput,
 	if record.Members[userID(current.Identity)] == "" {
 		return nil, apiError(errGroupDenied)
 	}
-	return &groupOutput{Status: http.StatusOK, Body: apiGroupView(input.Name, record, current)}, nil
+	view, err := s.groupView(ctx, input.Name, record, current)
+	if err != nil {
+		return nil, apiError(err)
+	}
+	return &groupOutput{Status: http.StatusOK, Body: view}, nil
 }
 
 func (s *Service) apiInvitation(ctx context.Context, input *nameInput) (*invitationOutput, error) {
@@ -369,8 +379,13 @@ func (s *Service) apiInvitation(ctx context.Context, input *nameInput) (*invitat
 	return output, nil
 }
 
-func (s *Service) apiUpdateGroup(ctx context.Context, name, action, target, role string) (*groupOutput, error) {
+func (s *Service) apiUpdateGroup(ctx context.Context, name, action, target, role, username string) (*groupOutput, error) {
 	current := currentAPISession(ctx).current
+	if action == "invite" && username != "" {
+		if err := s.prepareGroupInvitation(ctx, name, userID(current.Identity), target, username); err != nil {
+			return nil, apiError(err)
+		}
+	}
 	record, err := s.updateGroup(ctx, name, userID(current.Identity), action, target, role)
 	if err != nil {
 		return nil, apiError(err)
@@ -378,16 +393,21 @@ func (s *Service) apiUpdateGroup(ctx context.Context, name, action, target, role
 	if record.Members[userID(current.Identity)] == "" {
 		return &groupOutput{Status: http.StatusNoContent}, nil
 	}
-	return &groupOutput{Status: http.StatusOK, Body: apiGroupView(name, record, current)}, nil
-}
-
-func apiGroupView(name string, record namespaceRecord, current session) *groupView {
-	view := &groupView{Name: name, Type: groupNamespace, CreatorUserID: record.CreatorUserID,
-		Role: record.Members[userID(current.Identity)], Members: record.Members, CSRF: current.CSRF}
-	if view.Role == "owner" {
-		view.Invitations = record.Invitations
+	if action == "invite" && username != "" {
+		if err := s.cacheVerifiedGroupUsername(ctx, name, target, username); err != nil {
+			view := fallbackGroupView(name, record, current)
+			markVerifiedInvitation(view, target, username)
+			return &groupOutput{Status: http.StatusOK, Body: view}, nil
+		}
 	}
-	return view
+	view, err := s.groupView(ctx, name, record, current)
+	if err != nil {
+		view = fallbackGroupView(name, record, current)
+		if action == "invite" && username != "" {
+			markVerifiedInvitation(view, target, username)
+		}
+	}
+	return &groupOutput{Status: http.StatusOK, Body: view}, nil
 }
 
 func apiError(err error) error {
@@ -398,6 +418,8 @@ func apiError(err error) error {
 		return huma.Error403Forbidden("forbidden")
 	case errors.Is(err, errNotGroup), errors.Is(err, errMemberNotFound), errors.Is(err, storage.ErrNotFound):
 		return huma.Error404NotFound("group, user, member, or invitation not found")
+	case errors.Is(err, errUserNotFound):
+		return huma.Error404NotFound("user not found")
 	case errors.Is(err, errInvalidMember):
 		return huma.Error400BadRequest(err.Error())
 	default:

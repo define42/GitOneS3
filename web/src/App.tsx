@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { api, errorMessage, safeReturnTo, validName } from "./api";
+import { APIError, api, errorMessage, safeReturnTo, validName } from "./api";
 import type { Group, Role, Session, Space } from "./api";
 import { NewRepository, RepositoryList, RepositoryPage } from "./Repositories";
 import { TokensPage } from "./Tokens";
 import { SSHKeysPage } from "./SSHKeys";
 import { loadSpaces } from "./spaces";
 import { Header } from "./Header";
+import { pageTitle } from "./pageTitle";
 
 function Icon({
   name = "branch",
@@ -561,6 +562,7 @@ function NewGroup({ session }: { session: Session }) {
 
 function MemberRow({
   userId,
+  username,
   role,
   session,
   owner,
@@ -568,6 +570,7 @@ function MemberRow({
   mutate,
 }: {
   userId: string;
+  username?: string;
   role: Role;
   session: Session;
   owner: boolean;
@@ -578,14 +581,17 @@ function MemberRow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const self = userId === session.userId;
-  const label = self ? `${session.username} (you)` : userId;
+  const knownUsername = self ? (session.username ?? username) : username;
+  const label = knownUsername
+    ? `${knownUsername}${self ? " (you)" : ""}`
+    : "Username unavailable";
   async function change(remove: boolean) {
     if (
       remove &&
       !window.confirm(
         pending
-          ? "Cancel this invitation?"
-          : "Remove this member from the group? They will lose access immediately.",
+          ? `Cancel invitation for ${label}?`
+          : `Remove ${label} from the group? They will lose access immediately.`,
       )
     )
       return;
@@ -606,20 +612,25 @@ function MemberRow({
   return (
     <div className="member-row" data-testid="member-row">
       <div className="member-main">
-        <Avatar name={self ? session.username! : "ID"} />
+        <Avatar name={knownUsername ?? "?"} />
         <div className="member-identity" data-user-id={userId}>
-          <strong title={userId}>{label}</strong>
+          <strong>{label}</strong>
           <span className="muted">
             {pending
               ? "Invitation pending"
               : self
                 ? "Signed-in account"
-                : "Verified identity"}
+                : knownUsername
+                  ? "Verified identity"
+                  : "Account name could not be verified"}
           </span>
         </div>
         <RoleBadge role={role} />
       </div>
-      {owner && (
+      {owner && !knownUsername && (
+        <p className="muted">Access controls are unavailable until this username can be verified.</p>
+      )}
+      {owner && !!knownUsername && (
         <div className="member-actions">
           {!pending && (
             <>
@@ -640,6 +651,7 @@ function MemberRow({
                 className="button small"
                 disabled={busy || nextRole === role}
                 onClick={() => change(false)}
+                aria-label={`Update role for ${label}`}
               >
                 Update role
               </button>
@@ -649,6 +661,11 @@ function MemberRow({
             className="button small danger"
             disabled={busy}
             onClick={() => change(true)}
+            aria-label={
+              pending
+                ? `Cancel invitation for ${label}`
+                : `Remove ${label} from group`
+            }
           >
             {pending ? "Cancel invitation" : "Remove"}
           </button>
@@ -674,7 +691,9 @@ function GroupPage({
   const [role, setRole] = useState<Role>("developer");
   const [busy, setBusy] = useState(false);
   const [inviteError, setInviteError] = useState("");
+  const [inviteUsernameError, setInviteUsernameError] = useState("");
   const [success, setSuccess] = useState("");
+  const inviteUsernameInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     let active = true;
     api<Group>(`/groups/${encodeURIComponent(name)}`)
@@ -702,22 +721,49 @@ function GroupPage({
   }
   async function invite(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setBusy(true);
     setInviteError("");
+    setInviteUsernameError("");
     setSuccess("");
+    if (!validName(username)) {
+      setInviteUsernameError("Enter a valid GitOne username.");
+      inviteUsernameInput.current?.focus();
+      return;
+    }
+    setBusy(true);
     try {
-      if (!validName(username))
-        throw new Error("Enter a valid GitOne username.");
-      const target = await api<{ username: string; userId: string }>(
-        `/users/${encodeURIComponent(username)}`,
-      );
-      await mutate("POST", "/invitations", { userId: target.userId, role });
+      let target: { username: string; userId: string };
+      try {
+        target = await api<{ username: string; userId: string }>(
+          `/users/${encodeURIComponent(username)}`,
+        );
+      } catch (e) {
+        if (e instanceof APIError && e.status === 404) {
+          setInviteUsernameError(
+            `No GitOne user named ${username} was found. Check the username and try again.`,
+          );
+          inviteUsernameInput.current?.focus();
+          return;
+        }
+        throw e;
+      }
+      await mutate("POST", "/invitations", {
+        userId: target.userId,
+        username: target.username,
+        role,
+      });
       setSuccess(
         `Invitation sent to ${username}. They can accept it from their spaces page.`,
       );
       setUsername("");
     } catch (e) {
-      setInviteError(errorMessage(e));
+      if (e instanceof APIError && e.status === 404 && e.message === "user not found") {
+        setInviteUsernameError(
+          `No GitOne user named ${username} was found. Check the username and try again.`,
+        );
+        inviteUsernameInput.current?.focus();
+      } else {
+        setInviteError(errorMessage(e));
+      }
     } finally {
       setBusy(false);
     }
@@ -779,6 +825,7 @@ function GroupPage({
           </a>
         )}
       </nav>
+      {group.usernameLookupError && <Notice>{group.usernameLookupError}</Notice>}
       {settings && !owner ? (
         <Notice>Only group owners can manage members and invitations.</Notice>
       ) : settings ? (
@@ -811,14 +858,28 @@ function GroupPage({
                     <label htmlFor="invite-username">Invite username</label>
                     <input
                       id="invite-username"
+                      ref={inviteUsernameInput}
                       value={username}
-                      onChange={(e) => setUsername(e.target.value)}
+                      onChange={(e) => {
+                        setUsername(e.target.value);
+                        setInviteUsernameError("");
+                      }}
                       required
                       autoCapitalize="none"
                       autoComplete="off"
                       spellCheck={false}
-                      aria-describedby="invite-help invite-error"
+                      aria-invalid={!!inviteUsernameError}
+                      aria-describedby={
+                        inviteUsernameError
+                          ? "invite-help invite-username-error"
+                          : "invite-help"
+                      }
                     />
+                    {inviteUsernameError && (
+                      <div id="invite-username-error">
+                        <Notice>{inviteUsernameError}</Notice>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label htmlFor="invitation-role">Invitation role</label>
@@ -867,6 +928,7 @@ function GroupPage({
                   <MemberRow
                     key={`${id}-${memberRole}`}
                     userId={id}
+                    username={group.memberUsernames?.[id]}
                     role={memberRole}
                     session={session}
                     owner
@@ -889,6 +951,7 @@ function GroupPage({
                       <MemberRow
                         key={id}
                         userId={id}
+                        username={group.invitationUsernames?.[id]}
                         role={invitationRole}
                         session={session}
                         owner
@@ -1031,6 +1094,9 @@ export function App() {
   const destination = path + location.search;
   const publicPage =
     path === "/" || path === "/auth/login" || path === "/auth/register";
+  useEffect(() => {
+    document.title = pageTitle(path, location.search, session, !!error);
+  }, [path, destination, session, error]);
   useEffect(() => {
     if (session && !session.authenticated && !publicPage)
       location.replace(

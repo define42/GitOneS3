@@ -21,7 +21,11 @@ export interface Group {
   creatorUserId: string;
   role: Role;
   members: Record<string, Role>;
+  memberUsernames: Record<string, string>;
   invitations?: Record<string, Role>;
+  invitationUsernames: Record<string, string>;
+  unresolvedUserIds?: string[];
+  usernameLookupError?: string;
   csrfToken: string;
 }
 export interface Repository {
