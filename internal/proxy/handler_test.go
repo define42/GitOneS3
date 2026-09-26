@@ -408,6 +408,125 @@ func TestHandlerPropagatesRequestCancellation(t *testing.T) {
 	waitForSignal(t, done, "canceled proxy completion")
 }
 
+func TestHandlerGitBodyReadDeadline(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		method   string
+		path     string
+		extended bool
+	}{
+		{name: "push", method: http.MethodPost, path: "/alice/repo.git/git-receive-pack", extended: true},
+		{name: "fetch", method: http.MethodPost, path: "/alice/repo.git/git-upload-pack", extended: true},
+		{name: "discovery", method: http.MethodGet, path: "/alice/repo.git/info/refs?service=git-upload-pack"},
+		{name: "wrong method", method: http.MethodGet, path: "/alice/repo.git/git-receive-pack"},
+		{name: "local owner", method: http.MethodPost, path: "/acme/repo.git/git-receive-pack"},
+		{name: "ordinary post", method: http.MethodPost, path: "/alice/auth/logout"},
+		{name: "lfs", method: http.MethodPost, path: "/alice/repo.git/info/lfs/objects/batch"},
+		{name: "nested suffix", method: http.MethodPost, path: "/alice/other/repo.git/git-receive-pack"},
+		{name: "missing repository suffix", method: http.MethodPost, path: "/alice/repo/git-receive-pack"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			response := &readDeadlineWriter{
+				ResponseRecorder: httptest.NewRecorder(),
+				deadline:         time.Now().Add(30 * time.Second),
+			}
+			initialDeadline := response.deadline
+			before := time.Now()
+			checkDeadline := func() {
+				t.Helper()
+				if test.extended {
+					if response.deadline.Before(before.Add(90*time.Second)) ||
+						response.deadline.After(time.Now().Add(90*time.Second)) {
+						t.Errorf("Git forwarding deadline = %v, want a finite 90-second body budget", response.deadline)
+					}
+					return
+				}
+				if !response.deadline.Equal(initialDeadline) {
+					t.Errorf("non-streaming deadline changed from %v to %v", initialDeadline, response.deadline)
+				}
+			}
+			transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+				checkDeadline()
+				body, err := io.ReadAll(request.Body)
+				if err != nil {
+					return nil, err
+				}
+				if string(body) != "body" {
+					t.Errorf("forwarded body = %q, want body", body)
+				}
+				return proxyResponse(http.StatusOK, "ok"), nil
+			})
+			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				checkDeadline()
+				w.WriteHeader(http.StatusOK)
+			})
+			handler := proxyTestHandler(t, 0, transport, next)
+			request := httptest.NewRequestWithContext(t.Context(), test.method, test.path, strings.NewReader("body"))
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", response.Code)
+			}
+			// An unread-body drain can run after the proxy returns.
+			checkDeadline()
+		})
+	}
+}
+
+func TestHandlerGitBodyReadDeadlineRespectsContext(t *testing.T) {
+	t.Parallel()
+	deadline := time.Now().Add(10 * time.Second)
+	ctx, cancel := context.WithDeadline(t.Context(), deadline)
+	defer cancel()
+	response := &readDeadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+	transport := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		if !response.deadline.Equal(deadline) {
+			t.Errorf("read deadline = %v, want context deadline %v", response.deadline, deadline)
+		}
+		return proxyResponse(http.StatusOK, "ok"), nil
+	})
+	handler := proxyTestHandler(t, 0, transport, http.NotFoundHandler())
+	request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/alice/repo.git/git-receive-pack", nil)
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+}
+
+func TestHandlerGitBodyReadDeadlineFailure(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{name: "connection failure", err: errors.New("connection closed"), status: http.StatusServiceUnavailable},
+		{name: "unsupported writer", err: http.ErrNotSupported, status: http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			forwarded := false
+			transport := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				forwarded = true
+				return proxyResponse(http.StatusOK, "ok"), nil
+			})
+			handler := proxyTestHandler(t, 0, transport, http.NotFoundHandler())
+			response := &readDeadlineWriter{ResponseRecorder: httptest.NewRecorder(), err: test.err}
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/alice/repo.git/git-receive-pack", nil)
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d", response.Code, test.status)
+			}
+			if forwarded != (test.status == http.StatusOK) {
+				t.Errorf("forwarded = %t for deadline error %v", forwarded, test.err)
+			}
+		})
+	}
+}
+
 func TestIsValidDestination(t *testing.T) {
 	t.Parallel()
 
@@ -522,6 +641,20 @@ func proxyResponse(status int, body string) *http.Response {
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
+}
+
+type readDeadlineWriter struct {
+	*httptest.ResponseRecorder
+	deadline time.Time
+	err      error
+}
+
+func (w *readDeadlineWriter) SetReadDeadline(deadline time.Time) error {
+	if w.err != nil {
+		return w.err
+	}
+	w.deadline = deadline
+	return nil
 }
 
 type resolverFunc func(shard.ShardID) (*url.URL, error)

@@ -15,6 +15,7 @@ import (
 
 const (
 	defaultReadHeaderTimeout = 10 * time.Second
+	defaultBodyReadTimeout   = 30 * time.Second
 	defaultIdleTimeout       = 2 * time.Minute
 	defaultShutdownTimeout   = 30 * time.Second
 	defaultReadinessTimeout  = 3 * time.Second
@@ -32,8 +33,9 @@ type Server struct {
 	logger     *slog.Logger
 }
 
-// New constructs a streaming-safe HTTP server. Read and write timeouts remain
-// unset because Git and LFS transfers can legitimately be long-lived.
+// New constructs an HTTP server with a default request-body read deadline.
+// Streaming handlers can override it with a bounded transfer deadline. Writes
+// have no server-wide timeout so streaming responses can be long-lived.
 func New(address string, handler http.Handler, logger *slog.Logger) (*Server, error) {
 	if handler == nil {
 		return nil, errors.New("handler is required")
@@ -137,11 +139,39 @@ func LogRequests(next http.Handler, logger *slog.Logger) http.Handler {
 func newServer(address string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              address,
-		Handler:           handler,
+		Handler:           withBodyReadDeadline(handler),
 		ReadHeaderTimeout: defaultReadHeaderTimeout,
-		IdleTimeout:       defaultIdleTimeout,
-		MaxHeaderBytes:    defaultMaxHeaderBytes,
+		// Also bound body drains for protocol errors handled by net/http
+		// before our handler runs (for example, an unsupported Expect).
+		ReadTimeout:    defaultBodyReadTimeout,
+		IdleTimeout:    defaultIdleTimeout,
+		MaxHeaderBytes: defaultMaxHeaderBytes,
 	}
+}
+
+func withBodyReadDeadline(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Body == nil || request.Body == http.NoBody {
+			next.ServeHTTP(response, request)
+			return
+		}
+
+		controller := http.NewResponseController(response)
+		deadline := time.Now().Add(defaultBodyReadTimeout)
+		setDeadline := func() {
+			if err := controller.SetReadDeadline(deadline); err != nil {
+				slog.ErrorContext(request.Context(), "set HTTP body read deadline", "error", err)
+				// Writing an error response can itself drain the unread body.
+				// Abort the connection if that drain cannot be bounded.
+				panic(http.ErrAbortHandler)
+			}
+		}
+		setDeadline()
+		// net/http drains unread bodies after ServeHTTP returns. Restore the
+		// default even if a streaming handler cleared its own deadline.
+		defer setDeadline()
+		next.ServeHTTP(response, request)
+	})
 }
 
 func serveReadiness(response http.ResponseWriter, request *http.Request, checker Checker) {

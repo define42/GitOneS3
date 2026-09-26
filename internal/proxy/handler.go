@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/define42/GitOneS3/internal/shard"
 )
@@ -15,6 +16,7 @@ import (
 const (
 	ForwardedHeader      = "X-GitOne-Forwarded"
 	ForwardedHeaderValue = "1"
+	gitBodyReadTimeout   = 90 * time.Second
 )
 
 var (
@@ -129,6 +131,21 @@ func (h *Handler) serveRemote(
 	request *http.Request,
 	destination *url.URL,
 ) {
+	if isGitRPC(request) {
+		// The owner permits 90-second Git operations. Match that body budget
+		// on the entry connection, where owner authentication has not run yet.
+		// Keep it finite and active through any unread-body drain.
+		deadline := time.Now().Add(gitBodyReadTimeout)
+		if contextDeadline, ok := request.Context().Deadline(); ok && contextDeadline.Before(deadline) {
+			deadline = contextDeadline
+		}
+		if err := http.NewResponseController(response).SetReadDeadline(deadline); err != nil &&
+			!errors.Is(err, http.ErrNotSupported) {
+			http.Error(response, "cannot establish git forwarding deadline", http.StatusServiceUnavailable)
+			return
+		}
+	}
+
 	reverseProxy := *h.reverseProxy
 	reverseProxy.Rewrite = func(proxyRequest *httputil.ProxyRequest) {
 		proxyRequest.SetURL(destination)
@@ -138,6 +155,17 @@ func (h *Handler) serveRemote(
 		proxyRequest.Out.Header.Set(ForwardedHeader, ForwardedHeaderValue)
 	}
 	reverseProxy.ServeHTTP(response, request)
+}
+
+func isGitRPC(request *http.Request) bool {
+	if request.Method != http.MethodPost {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(request.URL.Path, "/"), "/")
+	if len(parts) != 3 || !strings.HasSuffix(parts[1], ".git") {
+		return false
+	}
+	return parts[2] == "git-upload-pack" || parts[2] == "git-receive-pack"
 }
 
 // hasForwardedMarker identifies a previous hop, not an authenticated caller.

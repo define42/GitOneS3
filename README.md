@@ -165,6 +165,15 @@ the full bounded Git snapshot. `GOMEMLIMIT` is a soft Go runtime target, not a
 hard container-memory guarantee. See [Git admission and limits](docs/git-authentication.md#concurrency-and-memory)
 and [performance measurements](docs/git-performance.md).
 
+HTTP request bodies have a 30-second read deadline, including bodies on health,
+authentication, and rejected requests. Git handlers use their existing 90-second
+operation deadline; forwarded Git RPC uploads also get a bounded 90-second read
+deadline. LFS routes currently return `501` and retain the default. After a
+handler returns, the default deadline is restored to bound any unread-body
+drain. Responses have no server-wide write timeout. Configure ingress body-read
+timeouts and connection limits as additional protection, allowing enough time
+for supported Git transfers.
+
 ## Local Development
 
 `make run` starts four GitOne instances, MinIO, Keycloak and a local HTTPS proxy
