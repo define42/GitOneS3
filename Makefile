@@ -5,12 +5,15 @@ VERSION ?= $(shell git describe --tags --always --dirty)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 COMPOSE := docker compose
 
-.PHONY: all build ui ui-check test-ui clean test test-short lint lint-fix fmt audit run run-local stop logs smoke smoke-git
+.PHONY: all build build-s3check ui ui-check test-ui clean test test-short lint lint-fix fmt audit run run-local stop logs smoke smoke-git
 
 all: lint test build
 
 build: ui
 	$(GO) build $(LDFLAGS) -o bin/$(BINARY_NAME) ./cmd/gitone
+
+build-s3check:
+	$(GO) build -o bin/gitone-s3check ./cmd/gitone-s3check
 
 ui:
 	$(NPM) --prefix web ci

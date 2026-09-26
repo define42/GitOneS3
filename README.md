@@ -169,6 +169,10 @@ concurrent CAS acceptance tests against the exact provider/version. Configure a
 lifecycle rule for abandoned objects and old versions below
 `maintenance/capabilities/` when bucket versioning is enabled.
 
+Use `make build-s3check` to build a standalone endpoint diagnostic with
+conditional-operation, pagination, range, and multipart checks. See
+[S3 compatibility checks](docs/s3-compatibility.md) for usage and interpretation.
+
 Git limits are shared across Smart HTTP and SSH, not independent per transport
 or repository. Measure peak **container memory** under overlapping operations on
 your largest supported repositories before raising active concurrency. The
