@@ -17,9 +17,10 @@ func BenchmarkHandlerUpload(b *testing.B) {
 		b.Run(mode, func(b *testing.B) {
 			snap, old, head := benchmarkSnapshot(8)
 			body := pkt("want "+head+" side-band-64k\n") + "0000"
-			if mode == "incremental" {
+			switch mode {
+			case "incremental":
 				body += pkt("have " + old + "\n")
-			} else if mode == "up-to-date" {
+			case "up-to-date":
 				body += pkt("have " + head + "\n")
 			}
 			request := []byte(body + pkt("done\n"))
