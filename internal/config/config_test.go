@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -15,7 +16,12 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	want := Config{
-		SSH:                 SSH{Port: 2222},
+		SSH: SSH{Port: 2222},
+		Git: Git{
+			MaxConcurrentOperations: DefaultGitMaxConcurrentOperations,
+			MaxQueuedOperations:     DefaultGitMaxQueuedOperations,
+			QueueTimeout:            DefaultGitQueueTimeout,
+		},
 		ShardCount:          256,
 		LocalShard:          173,
 		ListenAddress:       DefaultListenAddress,
@@ -59,6 +65,9 @@ func TestLoadOverrides(t *testing.T) {
 	environment["POD_NAMESPACE"] = "source-control"
 	environment["GITONE_LISTEN_ADDRESS"] = "127.0.0.1"
 	environment["GITONE_PUBLIC_PORT"] = "9000"
+	environment["GITONE_GIT_MAX_CONCURRENT_OPERATIONS"] = "2"
+	environment["GITONE_GIT_MAX_QUEUED_OPERATIONS"] = "8"
+	environment["GITONE_GIT_QUEUE_TIMEOUT"] = "1500ms"
 	environment["GITONE_HEADLESS_SERVICE"] = "shards"
 	environment["GITONE_CLUSTER_IDENTITY_FILE"] = "/run/gitone/identity.json"
 	environment["GITONE_S3_ENDPOINT"] = "http://minio.storage.svc:9000"
@@ -82,6 +91,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if got.ShardCount != 11 || got.LocalShard != 10 {
 		t.Errorf("Load() shard identity = (%d, %d), want (11, 10)", got.ShardCount, got.LocalShard)
+	}
+	if got.Git != (Git{MaxConcurrentOperations: 2, MaxQueuedOperations: 8, QueueTimeout: 1500 * time.Millisecond}) {
+		t.Errorf("Load() Git limits = %#v, want overridden limits", got.Git)
 	}
 	if got.S3.Bucket != "gitone-prod-shard-10" {
 		t.Errorf("Load() bucket = %q, want %q", got.S3.Bucket, "gitone-prod-shard-10")
@@ -162,6 +174,83 @@ func TestLoadRejectsNilLookup(t *testing.T) {
 	_, err := Load(nil)
 	if err == nil || !strings.Contains(err.Error(), "lookup is nil") {
 		t.Errorf("Load(nil) error = %v, want nil lookup error", err)
+	}
+}
+
+func TestLoadGitLimits(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name  string
+		key   string
+		value string
+		valid bool
+	}{
+		{name: "minimum active", key: "GITONE_GIT_MAX_CONCURRENT_OPERATIONS", value: "1", valid: true},
+		{name: "maximum active", key: "GITONE_GIT_MAX_CONCURRENT_OPERATIONS", value: "32", valid: true},
+		{name: "zero active", key: "GITONE_GIT_MAX_CONCURRENT_OPERATIONS", value: "0"},
+		{name: "negative active", key: "GITONE_GIT_MAX_CONCURRENT_OPERATIONS", value: "-1"},
+		{name: "excess active", key: "GITONE_GIT_MAX_CONCURRENT_OPERATIONS", value: "33"},
+		{name: "fractional active", key: "GITONE_GIT_MAX_CONCURRENT_OPERATIONS", value: "1.5"},
+		{name: "empty active", key: "GITONE_GIT_MAX_CONCURRENT_OPERATIONS", value: ""},
+		{name: "no queue", key: "GITONE_GIT_MAX_QUEUED_OPERATIONS", value: "0", valid: true},
+		{name: "maximum queue", key: "GITONE_GIT_MAX_QUEUED_OPERATIONS", value: "1024", valid: true},
+		{name: "negative queue", key: "GITONE_GIT_MAX_QUEUED_OPERATIONS", value: "-1"},
+		{name: "excess queue", key: "GITONE_GIT_MAX_QUEUED_OPERATIONS", value: "1025"},
+		{name: "invalid queue", key: "GITONE_GIT_MAX_QUEUED_OPERATIONS", value: "many"},
+		{name: "overflow queue", key: "GITONE_GIT_MAX_QUEUED_OPERATIONS", value: "99999999999999999999"},
+		{name: "empty queue", key: "GITONE_GIT_MAX_QUEUED_OPERATIONS", value: ""},
+		{name: "minimum timeout", key: "GITONE_GIT_QUEUE_TIMEOUT", value: "1ns", valid: true},
+		{name: "maximum timeout", key: "GITONE_GIT_QUEUE_TIMEOUT", value: "90s", valid: true},
+		{name: "compound timeout", key: "GITONE_GIT_QUEUE_TIMEOUT", value: "1m30s", valid: true},
+		{name: "zero timeout", key: "GITONE_GIT_QUEUE_TIMEOUT", value: "0s"},
+		{name: "negative timeout", key: "GITONE_GIT_QUEUE_TIMEOUT", value: "-1s"},
+		{name: "excess timeout", key: "GITONE_GIT_QUEUE_TIMEOUT", value: "90.000000001s"},
+		{name: "unitless timeout", key: "GITONE_GIT_QUEUE_TIMEOUT", value: "5"},
+		{name: "overflow timeout", key: "GITONE_GIT_QUEUE_TIMEOUT", value: "99999999999999999999s"},
+		{name: "empty timeout", key: "GITONE_GIT_QUEUE_TIMEOUT", value: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			environment := baseEnvironment()
+			environment[test.key] = test.value
+			cfg, err := Load(testLookup(environment))
+			if (err == nil) != test.valid {
+				t.Fatalf("Load() error = %v, want valid = %v", err, test.valid)
+			}
+			if test.valid && test.key == "GITONE_GIT_MAX_QUEUED_OPERATIONS" && test.value == "0" && cfg.Git.MaxQueuedOperations != 0 {
+				t.Fatal("zero queued operations must preserve fail-fast mode")
+			}
+		})
+	}
+}
+
+func TestConfigValidateGitLimits(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		limits Git
+		valid  bool
+	}{
+		{name: "programmatic zero values", valid: true},
+		{name: "upper bounds", limits: Git{MaxConcurrentOperations: 32, MaxQueuedOperations: 1024, QueueTimeout: 90 * time.Second}, valid: true},
+		{name: "negative active", limits: Git{MaxConcurrentOperations: -1}},
+		{name: "excess active", limits: Git{MaxConcurrentOperations: 33}},
+		{name: "negative queue", limits: Git{MaxQueuedOperations: -1}},
+		{name: "excess queue", limits: Git{MaxQueuedOperations: 1025}},
+		{name: "negative timeout", limits: Git{QueueTimeout: -time.Nanosecond}},
+		{name: "excess timeout", limits: Git{QueueTimeout: 90*time.Second + time.Nanosecond}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load(testLookup(baseEnvironment()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Git = test.limits
+			if err := cfg.Validate(); (err == nil) != test.valid {
+				t.Fatalf("Validate() error = %v, want valid = %v", err, test.valid)
+			}
+		})
 	}
 }
 

@@ -29,6 +29,13 @@ listenAddress: 0.0.0.0
 # switch to indexed. See docs/space-discovery.md before upgrading.
 spaceDiscoveryMode: indexed
 
+# Shared per-shard HTTP/SSH limits. Measure peak container memory on your largest
+# repositories before raising active concurrency; GOMEMLIMIT is only a soft limit.
+git:
+  maxConcurrentOperations: 1
+  maxQueuedOperations: 4
+  queueTimeout: 5s
+
 ssh:
   enabled: false
   port: 2222

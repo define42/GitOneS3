@@ -33,15 +33,26 @@ func WithWriteAuthorization(ctx context.Context, authorize func(context.Context)
 }
 
 type Handler struct {
-	store *repository.Store
-	slots chan struct{}
+	store      *repository.Store
+	operations *admission
+	references *admission
 }
 
-func New(store *repository.Store) (*Handler, error) {
+func New(store *repository.Store, options ...Options) (*Handler, error) {
 	if store == nil {
 		return nil, errors.New("gittransport: repository store is required")
 	}
-	return &Handler{store: store, slots: make(chan struct{}, 1)}, nil
+	opts, err := admissionOptions(options)
+	if err != nil {
+		return nil, err
+	}
+	return &Handler{
+		store:      store,
+		operations: newAdmission(opts.MaxConcurrentOperations, opts.MaxQueuedOperations, opts.QueueTimeout),
+		// Ref-only HTTP requests read bounded metadata, not object bodies. They
+		// have their own small gate so transfers cannot monopolize discovery.
+		references: newAdmission(4, opts.MaxQueuedOperations, opts.QueueTimeout),
+	}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -72,13 +83,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid git request", http.StatusBadRequest)
 		return
 	}
-	select {
-	case h.slots <- struct{}{}:
-		defer func() { <-h.slots }()
-	default:
-		http.Error(w, "git service is busy; retry shortly", http.StatusServiceUnavailable)
-		return
-	}
 	if !advertise {
 		media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if err != nil || media != "application/x-"+service+"-request" || r.Header.Get("Content-Encoding") != "" {
@@ -93,7 +97,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	snapshot, err := h.store.ReadGit(ctx, namespace, name)
+	gate := h.operations
+	if advertise {
+		gate = h.references
+	}
+	release, err := gate.acquire(ctx)
+	if err != nil {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "git service is busy; retry shortly", http.StatusServiceUnavailable)
+		return
+	}
+	defer release()
+	var snapshot *repository.GitSnapshot
+	if advertise {
+		snapshot, err = h.store.ReadGitReferences(ctx, namespace, name)
+	} else {
+		snapshot, err = h.store.ReadGit(ctx, namespace, name)
+	}
 	if err != nil {
 		status := http.StatusServiceUnavailable
 		if errors.Is(err, repository.ErrNotFound) {
@@ -110,12 +130,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeBytes(w, advertisement(snapshot, service))
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxPackBytes+1))
+	bodyLimit := int64(maxPackBytes)
+	if service == upload {
+		bodyLimit = maxNegotiationBytes
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, bodyLimit+1))
 	if err != nil {
 		http.Error(w, "cannot read git request", http.StatusBadRequest)
 		return
 	}
-	if len(body) > maxPackBytes {
+	if int64(len(body)) > bodyLimit {
 		http.Error(w, "git request exceeds limit", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -255,93 +279,6 @@ func referenceAdvertisement(snap *repository.GitSnapshot, service string) []byte
 	}
 	out.WriteString("0000")
 	return []byte(out.String())
-}
-
-func (h *Handler) upload(ctx context.Context, snap *repository.GitSnapshot, body []byte) ([]byte, error) {
-	r := bytes.NewReader(body)
-	wants := map[string]string{}
-	isDone, sideband := false, false
-	count := 0
-	for r.Len() > 0 {
-		line, flush, err := readPkt(r)
-		if err != nil {
-			return nil, err
-		}
-		if flush {
-			continue
-		}
-		count++
-		if count > 20000 {
-			return nil, repository.ErrLimit
-		}
-		fields := strings.Fields(string(line))
-		if len(fields) == 0 {
-			return nil, errPack
-		}
-		switch fields[0] {
-		case "want":
-			if len(fields) < 2 || !validID(fields[1]) {
-				return nil, errPack
-			}
-			advertised := false
-			for _, id := range snap.References {
-				if id == fields[1] {
-					advertised = true
-					break
-				}
-			}
-			if !advertised {
-				return nil, errPack
-			}
-			wants["refs/tags/want-"+strconv.Itoa(len(wants))] = fields[1]
-			for _, capability := range fields[2:] {
-				if capability == "side-band-64k" {
-					sideband = true
-				}
-				if capability != "side-band-64k" && capability != "ofs-delta" && capability != "no-progress" && !strings.HasPrefix(capability, "agent=") {
-					return nil, errPack
-				}
-			}
-		case "have":
-			if len(fields) != 2 || !validID(fields[1]) {
-				return nil, errPack
-			}
-		case "done":
-			if len(fields) != 1 {
-				return nil, errPack
-			}
-			isDone = true
-		default:
-			return nil, errPack
-		}
-	}
-	if len(wants) == 0 {
-		return nil, errPack
-	}
-	if !isDone {
-		return []byte(pkt("NAK\n")), nil
-	}
-	objects, err := repository.ReachableGit(ctx, wants, snap.Objects)
-	if err != nil {
-		return nil, err
-	}
-	pack, err := encodePack(ctx, objects)
-	if err != nil {
-		return nil, err
-	}
-	var output bytes.Buffer
-	output.WriteString(pkt("NAK\n"))
-	if sideband {
-		for len(pack) > 0 {
-			n := min(len(pack), 65515)
-			output.WriteString(pkt("\x01" + string(pack[:n])))
-			pack = pack[n:]
-		}
-		output.WriteString("0000")
-	} else {
-		output.Write(pack)
-	}
-	return output.Bytes(), nil
 }
 
 func (h *Handler) receive(ctx context.Context, snap *repository.GitSnapshot, body []byte) ([]byte, error) {

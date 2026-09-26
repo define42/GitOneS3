@@ -175,15 +175,21 @@ repository, Git subprocess, server hook, or local Git config is authoritative.
 | Complete reachable repository content | 64 MiB and 10,000 objects |
 | Serialized object manifest | 1 MiB; can constrain object count below 10,000 |
 | Published refs / updates per push | 1,000 each |
-| Git HTTP request body | 72 MiB |
+| Push request body / pack input | 72 MiB |
+| Upload-pack negotiation input (HTTP and SSH) | 1 MiB |
 | Pack delta depth | 64 |
 | Git request deadline | 90 seconds |
-| Concurrent Git requests per shard handler | 1; busy requests receive `503` |
+| Active Git operations per shard process | 1 by default; configurable from 1 to 32, shared with SSH |
+| Waiting Git operations per shard process | 4 by default; configurable from 0 to 1,024 |
+| Admission queue timeout | 5 seconds by default; positive duration up to 90 seconds |
 
 These are small-repository limits, not a production large-repository engine.
 Pack inflation is also bounded; a highly compressed pack does not bypass
-decoded-object limits. Reads load the bounded reachable object set, and fetch
-does not optimize transfer by subtracting objects the client already has.
+decoded-object limits. Ref advertisements use a lightweight refs read instead
+of loading all Git objects. Incremental fetch respects accepted client `have`
+commits and excludes their reachable objects from the outgoing pack. Actual
+fetch/push processing still uses `ReadGit` to load the full bounded repository
+snapshot; reduced transfer size is not a bounded-memory streaming engine.
 Ordinary Git clients can negotiate the supported protocol without special flags.
 Tree entries are limited to 1,000 per directory, refs to 128-byte branch/tag
 names, and commit/tag text to UTF-8; commit author/committer names are bounded
@@ -192,6 +198,40 @@ in S3; automatic garbage collection is not implemented.
 Shallow/partial clones, Git protocol v2, SHA-256 repositories, LFS, server hooks,
 and branch-protection policy are not implemented. LFS routes return `501`.
 Browser file editing and repository rename/delete operations remain unavailable.
+
+## Concurrency and memory
+
+One admission limit is shared by Smart HTTP and SSH Git operations on each shard
+process, across all its repositories. The defaults keep one operation active
+and permit four waiting operations for up to five seconds. A full queue or an
+expired admission wait rejects the operation (`503` for HTTP, a Git/SSH error
+for SSH). Cancellation or a connection/request deadline removes waiting work;
+queued operations do not load repository objects while waiting. Setting the
+queue capacity to zero restores immediate rejection when all active slots are
+occupied. The queue timeout does not extend the request/connection deadline.
+
+Configure these environment variables, or the matching Helm values:
+
+| Environment | Helm value | Default | Allowed range |
+| --- | --- | --- | --- |
+| `GITONE_GIT_MAX_CONCURRENT_OPERATIONS` | `git.maxConcurrentOperations` | `1` | 1–32 |
+| `GITONE_GIT_MAX_QUEUED_OPERATIONS` | `git.maxQueuedOperations` | `4` | 0–1024 |
+| `GITONE_GIT_QUEUE_TIMEOUT` | `git.queueTimeout` | `5s` | Positive Go duration, at most `90s` |
+
+Compose accepts the same environment overrides. These controls change runtime
+admission only, not shard routing or repository/object limits. Concurrent pushes
+still publish through repository compare-and-swap: increasing concurrency does
+not make conflicting updates both succeed.
+
+Before raising active concurrency, test overlapping clone/fetch/push operations
+on your largest supported repositories inside the intended container limit.
+Measure peak container memory, including the process baseline, repository
+snapshots, pack decoding/encoding, and non-Go memory, and leave operational
+headroom. A 64 MiB repository limit is not a 64 MiB memory-per-operation limit.
+Queued connections also consume resources. `GOMEMLIMIT` is a soft Go runtime
+memory target; it cannot enforce a hard process/container memory ceiling or
+prevent an OOM kill. Keep the default of one until workload-specific measurements
+justify a higher value. See [performance measurements](git-performance.md).
 
 ## Native-client integration tests
 

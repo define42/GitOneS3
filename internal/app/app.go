@@ -75,7 +75,11 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		if err != nil {
 			return nil, fmt.Errorf("create repository store: %w", err)
 		}
-		gitHandler, err := gittransport.New(repositories)
+		gitHandler, err := gittransport.New(repositories, gittransport.Options{
+			MaxConcurrentOperations: cfg.Git.MaxConcurrentOperations,
+			MaxQueuedOperations:     cfg.Git.MaxQueuedOperations,
+			QueueTimeout:            cfg.Git.QueueTimeout,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("create Git transport: %w", err)
 		}

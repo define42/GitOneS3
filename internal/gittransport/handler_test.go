@@ -153,6 +153,68 @@ func TestHandlerValidation(t *testing.T) {
 	}
 }
 
+type advertisementStore struct {
+	storage.ObjectStore
+	objectReads int
+}
+
+func (s *advertisementStore) Get(ctx context.Context, key string) (io.ReadCloser, storage.ObjectInfo, error) {
+	if strings.Contains(key, "/objects/") {
+		s.objectReads++
+	}
+	return s.ObjectStore.Get(ctx, key)
+}
+
+func TestReferenceAdvertisementsDoNotReadObjectData(t *testing.T) {
+	t.Parallel()
+	for _, transport := range []string{"http", "ssh"} {
+		for _, service := range []string{upload, receive} {
+			t.Run(transport+"/"+service, func(t *testing.T) {
+				t.Parallel()
+				objects := &advertisementStore{ObjectStore: storage.NewMemoryStore()}
+				store, err := repository.New(objects)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = store.Create(t.Context(), "alice", repository.CreateInput{
+					Name: "demo", CreatedBy: "alice", InitializeReadme: true,
+					AuthorName: "Alice", AuthorEmail: "alice@example.test",
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				handler, err := New(store)
+				if err != nil {
+					t.Fatal(err)
+				}
+				objects.objectReads = 0
+				if transport == "http" {
+					w := httptest.NewRecorder()
+					handler.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet,
+						"/alice/demo.git/info/refs?service="+service, nil))
+					if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "refs/heads/main") {
+						t.Fatalf("advertisement = %d %s", w.Code, w.Body.String())
+					}
+				} else {
+					stream := &sshTestStream{input: bytes.NewReader([]byte("0000"))}
+					ctx := WithWriteAuthorization(t.Context(), func(context.Context) error { return nil })
+					if err := handler.ServeSSH(ctx, SSHRequest{
+						Namespace: "alice", Repository: "demo", Service: service, Stream: stream,
+					}); err != nil {
+						t.Fatal(err)
+					}
+					if !strings.Contains(stream.output.String(), "refs/heads/main") {
+						t.Fatal("missing advertised branch")
+					}
+				}
+				if objects.objectReads != 0 {
+					t.Fatalf("ref-only request read %d Git objects; want zero", objects.objectReads)
+				}
+			})
+		}
+	}
+}
+
 func TestReadPktStrict(t *testing.T) {
 	t.Parallel()
 	for _, value := range []string{"", "0", "000", "+004", "-004", "0001", "0002", "0003", "0005", "ffff", "000g"} {

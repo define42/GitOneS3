@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -24,6 +25,10 @@ const (
 	DefaultMaxComponentLength  = 255
 	DefaultMaxPathDepth        = 32
 	DefaultSpaceDiscoveryMode  = "indexed"
+
+	DefaultGitMaxConcurrentOperations = 1
+	DefaultGitMaxQueuedOperations     = 4
+	DefaultGitQueueTimeout            = 5 * time.Second
 
 	DefaultMaxPackCount             = uint32(32)
 	DefaultMaxSmallPackCount        = uint32(16)
@@ -58,6 +63,16 @@ type Config struct {
 	Path                PathPolicy
 	Auth                Auth
 	SSH                 SSH
+	Git                 Git
+}
+
+// Git bounds active and queued Smart HTTP and SSH work per shard process.
+// Programmatic zero active/timeout values select their defaults; zero queued
+// operations disables waiting. Load supplies explicit defaults for all fields.
+type Git struct {
+	MaxConcurrentOperations int
+	MaxQueuedOperations     int
+	QueueTimeout            time.Duration
 }
 
 // S3 configures the shard-local S3-compatible object store. Bucket is derived
@@ -190,9 +205,14 @@ func Load(lookup LookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	git, err := loadGit(lookup)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		Auth:                auth,
 		SSH:                 ssh,
+		Git:                 git,
 		ShardCount:          shardCount,
 		LocalShard:          localShard,
 		ListenAddress:       value(lookup, "GITONE_LISTEN_ADDRESS", DefaultListenAddress),
@@ -236,8 +256,34 @@ func Load(lookup LookupEnv) (Config, error) {
 	return cfg, nil
 }
 
+func loadGit(lookup LookupEnv) (Git, error) {
+	active, err := intValue(lookup, "GITONE_GIT_MAX_CONCURRENT_OPERATIONS", DefaultGitMaxConcurrentOperations)
+	if err != nil {
+		return Git{}, err
+	}
+	queuedInput := value(lookup, "GITONE_GIT_MAX_QUEUED_OPERATIONS", strconv.Itoa(DefaultGitMaxQueuedOperations))
+	queued, err := strconv.Atoi(queuedInput)
+	if err != nil {
+		return Git{}, fmt.Errorf("config: GITONE_GIT_MAX_QUEUED_OPERATIONS must be an integer between 0 and 1024")
+	}
+	timeout, err := time.ParseDuration(value(lookup, "GITONE_GIT_QUEUE_TIMEOUT", DefaultGitQueueTimeout.String()))
+	if err != nil || timeout <= 0 {
+		return Git{}, fmt.Errorf("config: GITONE_GIT_QUEUE_TIMEOUT must be a positive duration no greater than 90s")
+	}
+	return Git{MaxConcurrentOperations: active, MaxQueuedOperations: queued, QueueTimeout: timeout}, nil
+}
+
 // Validate checks invariants that must hold before the process accepts traffic.
 func (c Config) Validate() error {
+	if c.Git.MaxConcurrentOperations < 0 || c.Git.MaxConcurrentOperations > 32 {
+		return fmt.Errorf("config: git maximum concurrent operations must be between 1 and 32 (zero selects the default)")
+	}
+	if c.Git.MaxQueuedOperations < 0 || c.Git.MaxQueuedOperations > 1024 {
+		return fmt.Errorf("config: git maximum queued operations must be between 0 and 1024")
+	}
+	if c.Git.QueueTimeout < 0 || c.Git.QueueTimeout > 90*time.Second {
+		return fmt.Errorf("config: git queue timeout must be positive and no greater than 90s (zero selects the default)")
+	}
 	switch c.SpaceDiscoveryMode {
 	case "", "scan", "indexed":
 	default:

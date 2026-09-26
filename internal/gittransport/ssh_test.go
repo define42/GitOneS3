@@ -72,6 +72,8 @@ func TestServeSSHAdvertisement(t *testing.T) {
 func TestServeSSHAdmission(t *testing.T) {
 	t.Parallel()
 	handler, _ := sshTestHandler(t)
+	// This case deliberately disables the wait queue to test immediate overload.
+	handler.operations = newAdmission(1, 0, time.Second)
 	for _, tc := range []struct {
 		name, service string
 		stream        io.ReadWriter
@@ -88,8 +90,11 @@ func TestServeSSHAdmission(t *testing.T) {
 			}
 		})
 	}
-	handler.slots <- struct{}{}
-	defer func() { <-handler.slots }()
+	release, err := handler.operations.acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
 	stream := &sshTestStream{input: bytes.NewReader([]byte("0000"))}
 	if err := handler.ServeSSH(t.Context(), SSHRequest{
 		Namespace: "alice", Repository: "demo", Service: upload, Stream: stream,
@@ -97,9 +102,9 @@ func TestServeSSHAdmission(t *testing.T) {
 		t.Fatal("busy SSH session accessed repository")
 	}
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequestWithContext(
-		t.Context(), http.MethodGet, "/alice/demo.git/info/refs?service=git-upload-pack", nil,
-	))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/alice/demo.git/git-upload-pack", nil)
+	r.Header.Set("Content-Type", "application/x-git-upload-pack-request")
+	handler.ServeHTTP(response, r)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatal("HTTP and SSH do not share admission")
 	}
@@ -146,21 +151,27 @@ func TestServeSSHFetchNegotiation(t *testing.T) {
 	if err := writeSSH(client, []byte(pkt("want "+id+" side-band-64k\n")+"0000")); err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
-		if err := writeSSH(client, []byte(pkt("have "+id+"\n")+"0000")); err != nil {
+	for _, count := range []int{32, 8} {
+		unknown := pkt("have " + strings.Repeat("f", 40) + "\n")
+		if err := writeSSH(client, []byte(strings.Repeat(unknown, count)+"0000")); err != nil {
 			t.Fatal(err)
 		}
 		line, flush, err := readPkt(client)
 		if err != nil || flush || string(line) != "NAK\n" {
-			t.Fatalf("negotiation response = %q, %v, %v", line, flush, err)
+			t.Fatalf("unknown-have acknowledgement = %q, %v, %v", line, flush, err)
 		}
 	}
-	if err := writeSSH(client, []byte(pkt("done\n"))); err != nil {
+	// The first common object is acknowledged immediately, without waiting for
+	// a flush. Once ACKed, single-ACK negotiation is silent until the pack.
+	if err := writeSSH(client, []byte(pkt("have "+id+"\n"))); err != nil {
 		t.Fatal(err)
 	}
-	line, _, err := readPkt(client)
-	if err != nil || string(line) != "NAK\n" {
-		t.Fatalf("final acknowledgement = %q, %v", line, err)
+	line, flush, err := readPkt(client)
+	if err != nil || flush || string(line) != "ACK "+id+"\n" {
+		t.Fatalf("first common acknowledgement = %q, %v, %v", line, flush, err)
+	}
+	if err := writeSSH(client, []byte("0000"+pkt("have "+id+"\n")+"0000"+pkt("done\n"))); err != nil {
+		t.Fatal(err)
 	}
 	var pack bytes.Buffer
 	for {
@@ -177,7 +188,7 @@ func TestServeSSHFetchNegotiation(t *testing.T) {
 		pack.Write(line[1:])
 	}
 	objects, err := decodePack(t.Context(), pack.Bytes(), nil)
-	if err != nil || len(objects) != len(snapshot.Objects) {
+	if err != nil || len(objects) != 0 {
 		t.Fatalf("negotiated pack has %d objects: %v", len(objects), err)
 	}
 }

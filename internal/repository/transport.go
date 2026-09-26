@@ -84,29 +84,60 @@ func (s *Store) existingSnapshot(ctx context.Context, id, kind string, value any
 	return relative, nil
 }
 
-func (s *Store) ReadGit(ctx context.Context, namespace, name string) (*GitSnapshot, error) {
+// ReadGitReferences pins metadata, refs, and the manifest without reading Git
+// object bodies. Advertisements only need this bounded metadata. Object graph
+// validation is deferred to LoadGitObjects before transferring or publishing.
+func (s *Store) ReadGitReferences(ctx context.Context, namespace, name string) (*GitSnapshot, error) {
 	snap, err := s.load(ctx, namespace, name)
 	if err != nil {
 		return nil, err
 	}
-	result := &GitSnapshot{DefaultBranch: snap.metadata.DefaultBranch, References: maps.Clone(snap.refs.Refs), Objects: map[string]GitObject{}, original: snap}
 	var total int64
-	for id, info := range snap.manifest.Objects {
+	for _, info := range snap.manifest.Objects {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		total += info.Size
 		if total > MaxGitBytes {
 			return nil, ErrLimit
 		}
+	}
+	return &GitSnapshot{DefaultBranch: snap.metadata.DefaultBranch, References: maps.Clone(snap.refs.Refs), original: snap}, nil
+}
+
+// LoadGitObjects materializes and validates the already pinned generation. It
+// never reloads current refs: a concurrent push must not mix an advertisement's
+// refs with a different generation's objects or publication version.
+func (s *Store) LoadGitObjects(ctx context.Context, base *GitSnapshot) (*GitSnapshot, error) {
+	if base == nil || !idPattern.MatchString(base.original.metadata.ID) || base.original.version == "" {
+		return nil, ErrInvalid
+	}
+	snap := base.original
+	result := &GitSnapshot{DefaultBranch: snap.metadata.DefaultBranch, References: maps.Clone(snap.refs.Refs), Objects: map[string]GitObject{}, original: snap}
+	for id, info := range snap.manifest.Objects {
 		data, err := s.object(ctx, snap, id, info.Type)
 		if err != nil {
 			return nil, err
 		}
 		result.Objects[id] = GitObject{Type: info.Type, Data: data}
 	}
-	if _, err := ReachableGit(ctx, result.References, result.Objects); err != nil {
+	reachable, err := ReachableGit(ctx, result.References, result.Objects)
+	if err != nil {
 		// Invalid persisted graphs are corruption, not invalid client input.
 		return nil, fmt.Errorf("%w: %s", ErrCorrupt, err.Error())
 	}
+	// Only published, reachable objects may participate in fetch negotiation.
+	// An unrelated manifest entry is not evidence of a common client ancestor.
+	result.Objects = reachable
 	return result, nil
+}
+
+func (s *Store) ReadGit(ctx context.Context, namespace, name string) (*GitSnapshot, error) {
+	base, err := s.ReadGitReferences(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	return s.LoadGitObjects(ctx, base)
 }
 
 // PublishGit durably stores the complete next generation, rechecks the caller's

@@ -59,6 +59,8 @@ Git/LFS client -> public Service -> any gitone-N
 - Fine-grained, expiring personal access tokens and bounded native Git Smart
   HTTP clone, fetch, pull, and push, with owner-shard token verification and
   current namespace permissions.
+- Configurable shared HTTP/SSH Git admission with bounded waiting, lightweight
+  ref advertisements, and incremental fetches that respect client `have` history.
 - Optional Git-over-SSH clone/fetch/push, SSH public-key settings, authenticated
   shard forwarding, and live key/namespace permission checks. See
   [SSH setup](docs/git-ssh.md).
@@ -135,6 +137,9 @@ from the mounted cluster identity.
 | `GITONE_S3_PATH_STYLE` | `false` | Path-style S3 addressing |
 | `GITONE_S3_TLS` | `true` | Endpoint validation policy |
 | `GITONE_S3_BUCKET_PREFIX` | `gitone-shard` | Per-shard bucket prefix |
+| `GITONE_GIT_MAX_CONCURRENT_OPERATIONS` | `1` | Shared active Git operations per shard process; 1–32 |
+| `GITONE_GIT_MAX_QUEUED_OPERATIONS` | `4` | Waiting Git operations per shard process; 0–1024, zero disables waiting |
+| `GITONE_GIT_QUEUE_TIMEOUT` | `5s` | Maximum admission wait; positive Go duration up to `90s` |
 | `GITONE_PATH_MAX_TOP_LEVEL_LENGTH` | `63` | Maximum permanent namespace-key length |
 | `GITONE_PATH_MAX_COMPONENT_LENGTH` | `255` | Maximum decoded path-component length |
 | `GITONE_PATH_MAX_DEPTH` | `32` | Maximum namespace/repository path depth |
@@ -151,6 +156,14 @@ probes keep the shard unavailable. Production qualification must also run
 concurrent CAS acceptance tests against the exact provider/version. Configure a
 lifecycle rule for abandoned objects and old versions below
 `maintenance/capabilities/` when bucket versioning is enabled.
+
+Git limits are shared across Smart HTTP and SSH, not independent per transport
+or repository. Measure peak **container memory** under overlapping operations on
+your largest supported repositories before raising active concurrency. The
+existing repository/object bounds still apply, and actual transfers still load
+the full bounded Git snapshot. `GOMEMLIMIT` is a soft Go runtime target, not a
+hard container-memory guarantee. See [Git admission and limits](docs/git-authentication.md#concurrency-and-memory)
+and [performance measurements](docs/git-performance.md).
 
 ## Local Development
 

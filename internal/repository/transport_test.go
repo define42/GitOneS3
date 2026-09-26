@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -40,6 +41,99 @@ func TestGitObjectID(t *testing.T) {
 				t.Fatalf("GitObjectID() = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+type referenceReadStore struct {
+	storage.ObjectStore
+	objectReads int
+}
+
+func (s *referenceReadStore) Get(ctx context.Context, key string) (io.ReadCloser, storage.ObjectInfo, error) {
+	if strings.Contains(key, "/objects/") {
+		s.objectReads++
+	}
+	return s.ObjectStore.Get(ctx, key)
+}
+
+func TestGitReferenceSnapshotPinsGeneration(t *testing.T) {
+	t.Parallel()
+	objects := &referenceReadStore{ObjectStore: storage.NewMemoryStore()}
+	store, err := New(objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(t.Context(), "alice", createInput("demo", true)); err != nil {
+		t.Fatal(err)
+	}
+	objects.objectReads = 0
+	refs, err := store.ReadGitReferences(t.Context(), "alice", "demo")
+	if err != nil || refs == nil {
+		t.Fatalf("read refs: %v", err)
+	}
+	if objects.objectReads != 0 || refs.Objects != nil || len(refs.References) != 1 {
+		t.Fatal("reference advertisement loaded object bodies or lost refs")
+	}
+	base, err := store.LoadGitObjects(t.Context(), refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(base.Objects) != 3 || objects.objectReads != 3 || refs.Objects != nil {
+		t.Fatal("materialization did not independently load the pinned objects")
+	}
+	head := base.References["refs/heads/main"]
+	if err := store.PublishGit(t.Context(), base, []RefUpdate{{Name: "refs/tags/new", New: head}}, nil,
+		func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := store.LoadGitObjects(t.Context(), refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.ReadGitReferences(t.Context(), "alice", "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned.References["refs/tags/new"] != "" || current.References["refs/tags/new"] != head ||
+		pinned.original.version != refs.original.version || current.original.version == refs.original.version {
+		t.Fatal("object loading mixed repository generations")
+	}
+}
+
+func TestLoadGitObjectsRejectsUnpinnedSnapshot(t *testing.T) {
+	t.Parallel()
+	store, _ := newTestStore(t)
+	for _, base := range []*GitSnapshot{nil, {}} {
+		if _, err := store.LoadGitObjects(t.Context(), base); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("untrusted snapshot accepted: %v", err)
+		}
+	}
+}
+
+func TestLoadGitObjectsExcludesUnreachableManifestEntries(t *testing.T) {
+	t.Parallel()
+	store, base := transportFixture(t)
+	manifest := base.original.manifest
+	orphan, err := store.putObject(t.Context(), base.original.metadata.ID, "blob", []byte("unpublished data"), &manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := store.putSnapshot(t.Context(), base.original.metadata.ID, "manifest", manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := base.original.state
+	next.Generation++
+	next.PackManifest = key
+	if err := store.repositories.CompareAndSwapState(t.Context(), base.original.metadata.ID, base.original.version, next); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.ReadGit(t.Context(), "alice", "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Objects[orphan]; ok || len(loaded.Objects) != 3 {
+		t.Fatal("unreachable manifest entry exposed to fetch negotiation")
 	}
 }
 

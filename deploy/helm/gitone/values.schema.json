@@ -9,6 +9,7 @@
     "service",
     "listenAddress",
     "spaceDiscoveryMode",
+    "git",
     "auth",
     "s3",
     "clusterIdentity",
@@ -69,6 +70,16 @@
     },
     "listenAddress": {"type": "string", "minLength": 1},
     "spaceDiscoveryMode": {"type": "string", "enum": ["scan", "indexed"]},
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxConcurrentOperations", "maxQueuedOperations", "queueTimeout"],
+      "properties": {
+        "maxConcurrentOperations": {"type": "integer", "minimum": 1, "maximum": 32},
+        "maxQueuedOperations": {"type": "integer", "minimum": 0, "maximum": 1024},
+        "queueTimeout": {"type": "string", "minLength": 1, "description": "Positive Go duration no greater than 90s; validated by GitOne at startup."}
+      }
+    },
     "ssh": {
       "type": "object",
       "additionalProperties": false,

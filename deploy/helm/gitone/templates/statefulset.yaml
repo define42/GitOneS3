@@ -72,6 +72,12 @@ spec:
               protocol: TCP
             {{- end }}
           env:
+            - name: GITONE_GIT_MAX_CONCURRENT_OPERATIONS
+              value: {{ .Values.git.maxConcurrentOperations | quote }}
+            - name: GITONE_GIT_MAX_QUEUED_OPERATIONS
+              value: {{ .Values.git.maxQueuedOperations | quote }}
+            - name: GITONE_GIT_QUEUE_TIMEOUT
+              value: {{ .Values.git.queueTimeout | quote }}
             - name: GITONE_SPACE_DISCOVERY_MODE
               value: {{ .Values.spaceDiscoveryMode | quote }}
             - name: GITONE_SSH_ENABLED

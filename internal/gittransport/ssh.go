@@ -38,19 +38,18 @@ func (h *Handler) ServeSSH(ctx context.Context, request SSHRequest) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("git ssh session: %w", err)
 	}
-	select {
-	case h.slots <- struct{}{}:
-		defer func() { <-h.slots }()
-	default:
-		return errors.New("gittransport: git service is busy; retry shortly")
-	}
 	if request.Service == receive {
 		authorize, _ := ctx.Value(writeAuthorizationKey{}).(func(context.Context) error)
 		if authorize == nil {
 			return repository.ErrForbidden
 		}
 	}
-	snapshot, err := h.store.ReadGit(ctx, request.Namespace, request.Repository)
+	release, err := h.operations.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	snapshot, err := h.store.ReadGitReferences(ctx, request.Namespace, request.Repository)
 	if err != nil {
 		return fmt.Errorf("load git ssh repository: %w", err)
 	}
@@ -65,64 +64,63 @@ func (h *Handler) ServeSSH(ctx context.Context, request SSHRequest) error {
 
 func (h *Handler) uploadSSH(ctx context.Context, snapshot *repository.GitSnapshot, stream io.ReadWriter) error {
 	reader := &io.LimitedReader{R: stream, N: maxNegotiationBytes}
-	var wants bytes.Buffer
-	count := 0
+	n := newUploadNegotiation(snapshot)
 	for {
-		line, flush, err := readPkt(reader)
-		if errors.Is(err, io.EOF) && wants.Len() == 0 {
+		line, flush, err := n.readPacket(ctx, reader)
+		if errors.Is(err, io.EOF) && len(n.wants) == 0 {
 			return nil // ls-remote may close after reading the advertisement.
 		}
 		if err != nil {
 			return fmt.Errorf("read ssh wants: %w", err)
 		}
-		count++
-		if count > maxNegotiationPackets {
-			return repository.ErrLimit
-		}
 		if flush {
 			break
 		}
-		fields := strings.Fields(string(line))
-		if len(fields) == 0 || fields[0] != "want" {
-			return errPack
+		if err := n.want(line); err != nil {
+			return fmt.Errorf("validate ssh wants: %w", err)
 		}
-		wants.WriteString(pkt(string(line)))
 	}
-	if wants.Len() == 0 {
+	if len(n.wants) == 0 {
 		return nil // No requested objects, including an up-to-date fetch.
 	}
-	// Reuse HTTP's capability and advertised-object checks. The initial wants
-	// flush has no response in the stateful protocol; only have rounds get NAK.
-	if _, err := h.upload(ctx, snapshot, wants.Bytes()); err != nil {
-		return fmt.Errorf("validate ssh wants: %w", err)
+	// Advertisement and want validation require only references. Load the same
+	// pinned generation only when this session actually requests objects.
+	snapshot, err := h.store.LoadGitObjects(ctx, snapshot)
+	if err != nil {
+		return fmt.Errorf("load ssh fetch objects: %w", err)
 	}
 	for {
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("negotiate ssh fetch: %w", err)
-		}
-		line, flush, err := readPkt(reader)
+		line, flush, err := n.readPacket(ctx, reader)
 		if err != nil {
 			return fmt.Errorf("read ssh negotiation: %w", err)
 		}
-		count++
-		if count > maxNegotiationPackets {
-			return repository.ErrLimit
-		}
 		if flush {
-			if err := writeSSH(stream, []byte(pkt("NAK\n"))); err != nil {
-				return err
+			if !n.acknowledged {
+				if err := writeSSH(stream, []byte(pkt("NAK\n"))); err != nil {
+					return err
+				}
 			}
 			continue
 		}
 		fields := strings.Fields(string(line))
-		if len(fields) == 2 && fields[0] == "have" && validID(fields[1]) {
+		if len(fields) != 1 || fields[0] != "done" {
+			ack, err := n.have(snapshot, fields)
+			if err != nil {
+				return err
+			}
+			if ack != "" {
+				if err := writeSSH(stream, []byte(ack)); err != nil {
+					return err
+				}
+			}
 			continue
 		}
-		if len(fields) != 1 || fields[0] != "done" {
-			return errPack
+		if !n.acknowledged {
+			if err := writeSSH(stream, []byte(pkt("NAK\n"))); err != nil {
+				return err
+			}
 		}
-		wants.WriteString(pkt("done\n"))
-		result, err := h.upload(ctx, snapshot, wants.Bytes())
+		result, err := n.pack(ctx, snapshot)
 		if err != nil {
 			return fmt.Errorf("prepare ssh fetch: %w", err)
 		}
@@ -150,6 +148,10 @@ func (h *Handler) receiveSSH(ctx context.Context, snapshot *repository.GitSnapsh
 	updates, err := receiveCommands(bytes.NewReader(reader.data.Bytes()))
 	if err != nil {
 		return fmt.Errorf("validate ssh reference updates: %w", err)
+	}
+	snapshot, err = h.store.LoadGitObjects(ctx, snapshot)
+	if err != nil {
+		return fmt.Errorf("load git ssh objects: %w", err)
 	}
 	for _, update := range updates {
 		if update.New == "" {
