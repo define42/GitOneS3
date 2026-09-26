@@ -393,15 +393,17 @@ func (s *Service) apiUpdateGroup(ctx context.Context, name, action, target, role
 	if record.Members[userID(current.Identity)] == "" {
 		return &groupOutput{Status: http.StatusNoContent}, nil
 	}
+	var view *groupView
+	var viewErr error
 	if action == "invite" && username != "" {
-		if err := s.cacheVerifiedGroupUsername(ctx, name, target, username); err != nil {
-			view := fallbackGroupView(name, record, current)
-			markVerifiedInvitation(view, target, username)
-			return &groupOutput{Status: http.StatusOK, Body: view}, nil
-		}
+		viewErr = s.cacheVerifiedGroupUsername(ctx, name, target, username)
 	}
-	view, err := s.groupView(ctx, name, record, current)
-	if err != nil {
+	if viewErr == nil {
+		view, viewErr = s.groupView(ctx, name, record, current)
+	}
+	if viewErr != nil {
+		// The mutation is committed. Report name lookup failures in the view
+		// so callers do not retry an operation that already succeeded.
 		view = fallbackGroupView(name, record, current)
 		if action == "invite" && username != "" {
 			markVerifiedInvitation(view, target, username)

@@ -102,9 +102,7 @@ func (s *Service) groupView(ctx context.Context, name string, record namespaceRe
 	if err != nil {
 		return nil, err
 	}
-	for id, username := range resolved {
-		usernames[id] = username
-	}
+	maps.Copy(usernames, resolved)
 	if complete {
 		for id := range wanted {
 			unresolved[id] = time.Now().Add(unresolvedUsernameLifetime).Unix()
@@ -548,9 +546,7 @@ func (s *Service) serveUsernameLookup(w http.ResponseWriter, r *http.Request) {
 		serverError(w)
 		return
 	}
-	for id, username := range other {
-		names[id] = username
-	}
+	maps.Copy(names, other)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(usernameLookupResponse{Usernames: names})
 }
