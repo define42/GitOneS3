@@ -42,6 +42,7 @@ func isGitRequest(r *http.Request) bool {
 		return false
 	}
 	return (len(parts) == 4 && parts[2] == "info" && parts[3] == "refs") ||
+		(len(parts) >= 4 && parts[2] == "info" && parts[3] == "lfs") ||
 		(len(parts) == 3 && (parts[2] == "git-upload-pack" || parts[2] == "git-receive-pack"))
 }
 
@@ -116,9 +117,40 @@ func (s *Service) serveGit(w http.ResponseWriter, r *http.Request, namespace str
 		return
 	}
 	write := strings.HasSuffix(r.URL.Path, "/git-receive-pack") || r.URL.Query().Get("service") == "git-receive-pack"
+	lfs := len(parts) >= 4 && parts[2] == "info" && parts[3] == "lfs"
+	if lfs {
+		if len(parts) == 6 && parts[4] == "objects" && parts[5] == "batch" && r.Method == http.MethodPost {
+			// Classifying batch permissions needs its small JSON body. Bound
+			// those retained bodies before the downstream transfer admission.
+			select {
+			case s.lfsBatches <- struct{}{}:
+				defer func() { <-s.lfsBatches }()
+			default:
+				w.Header().Set("Retry-After", "1")
+				gitAuthError(w, huma.Error503ServiceUnavailable("LFS batch requests are busy"))
+				return
+			}
+		}
+		var err error
+		write, err = lfsWriteRequest(r, parts[4:])
+		if err != nil {
+			gitAuthError(w, err)
+			return
+		}
+	}
 	var credentials tokenCredentials
 	usingPAT := len(r.Header.Values("Authorization")) != 0
-	if usingPAT {
+	usingLFSGrant := lfs && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "+lfsGrantPrefix)
+	var grant lfsGrant
+	if usingLFSGrant {
+		var err error
+		grant, err = s.parseLFSRequestGrant(r, namespace, repo, write)
+		if err != nil {
+			gitAuthError(w, err)
+			return
+		}
+	}
+	if usingPAT && !usingLFSGrant {
 		var ok bool
 		credentials, ok = parseTokenCredentials(r)
 		if !ok {
@@ -132,7 +164,14 @@ func (s *Service) serveGit(w http.ResponseWriter, r *http.Request, namespace str
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		var current session
-		if usingPAT {
+		if usingLFSGrant {
+			// Expiry gates admission. The handler bounds an admitted transfer's
+			// lifetime; finalization still verifies this key and the live ACL.
+			if err := s.verifyLFSGrant(ctx, grant); err != nil {
+				return current, "", err
+			}
+			current = session{Username: grant.Principal.Username, Identity: grant.Principal.Identity}
+		} else if usingPAT {
 			principal, err := s.verifyToken(ctx, credentials)
 			if errors.Is(err, errInvalidToken) {
 				return current, "", huma.Error401Unauthorized("invalid credentials")
@@ -170,6 +209,9 @@ func (s *Service) serveGit(w http.ResponseWriter, r *http.Request, namespace str
 		return
 	}
 	ctx := context.WithValue(r.Context(), subjectKey{}, authz.Subject{UserID: userID(current.Identity), Authenticated: true})
+	if usingLFSGrant {
+		ctx = gittransport.WithLFSCredentialExpiry(ctx, time.Unix(grant.Expires, 0).UTC())
+	}
 	if write {
 		ctx = gittransport.WithWriteAuthorization(ctx, func(ctx context.Context) error { _, _, err := authorize(ctx); return err })
 	}

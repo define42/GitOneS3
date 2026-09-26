@@ -39,6 +39,8 @@ type IntegrityReport struct {
 	Objects      int    `json:"objects"`
 	Bytes        int64  `json:"bytes"`
 	Packs        int    `json:"packs"`
+	LFSObjects   int    `json:"lfsObjects"`
+	LFSBytes     int64  `json:"lfsBytes"`
 }
 
 // Generation identifies an immutable, recoverable state snapshot. A snapshot
@@ -233,6 +235,9 @@ func (s *Store) GarbageCollect(ctx context.Context, namespace, name string, opti
 		if _, err := s.verifyMaintenanceSnapshot(ctx, retained); err != nil {
 			return report, fmt.Errorf("verify retained snapshot %s: %w", key, err)
 		}
+		if err := s.markSnapshotLFS(ctx, retained, marked); err != nil {
+			return report, err
+		}
 		marked[key] = true
 		marked[retained.state.RefsSnapshot] = true
 		marked[retained.state.PackManifest] = true
@@ -248,8 +253,12 @@ func (s *Store) GarbageCollect(ctx context.Context, namespace, name string, opti
 	if !marked[current] {
 		return report, fmt.Errorf("current immutable state snapshot is missing: %w", ErrCorrupt)
 	}
-	report.RetainedArtifacts = len(marked) - 1 // The temporary lock is not retained data.
 	cutoff := time.Now().Add(-options.GracePeriod)
+	expiredLFS, err := s.prepareLFSGC(ctx, snap.metadata.ID, artifacts, marked, cutoff)
+	if err != nil {
+		return report, err
+	}
+	report.RetainedArtifacts = len(marked) - 1 // The temporary lock is not retained data.
 	candidates := make([]storage.ObjectInfo, 0)
 	for _, artifact := range artifacts {
 		if err := ctx.Err(); err != nil {
@@ -276,6 +285,14 @@ func (s *Store) GarbageCollect(ctx context.Context, namespace, name string, opti
 	if !options.Apply {
 		return report, nil
 	}
+	if err := s.abortExpiredLFS(ctx, snap.metadata.ID, expiredLFS); err != nil {
+		return report, err
+	}
+	// Remove discovery records before payloads. A partial delete then leaves
+	// reclaimable objects rather than records pointing at missing content.
+	slices.SortStableFunc(candidates, func(a, b storage.ObjectInfo) int {
+		return lfsDeletionPriority(a.Key) - lfsDeletionPriority(b.Key)
+	})
 	for _, artifact := range candidates {
 		if err := s.objects.Delete(ctx, artifact.Key, artifact.Version); err != nil {
 			return report, fmt.Errorf("delete orphan artifact %s: %w", artifact.Key, err)
@@ -319,7 +336,7 @@ func isStateArtifact(key string) bool {
 }
 
 func collectibleArtifact(key string) bool {
-	return looseKeyPattern.MatchString(key) || packKeyPattern.MatchString(key) || dataSnapshotPattern.MatchString(key)
+	return looseKeyPattern.MatchString(key) || packKeyPattern.MatchString(key) || dataSnapshotPattern.MatchString(key) || collectibleLFSArtifact(key)
 }
 
 func maintenanceStateKey(state storage.RepositoryState) (string, error) {
@@ -365,7 +382,7 @@ func (s *Store) readMaintenanceSnapshot(ctx context.Context, metadata Metadata, 
 		return snapshot{}, err
 	}
 	if result.refs.SchemaVersion != 1 || result.refs.Refs == nil || len(result.refs.Refs) > maxObjects ||
-		(result.manifest.SchemaVersion != 1 && result.manifest.SchemaVersion != 2) || result.manifest.ObjectFormat != "sha1" || result.manifest.Objects == nil || len(result.manifest.Objects) > maxObjects {
+		(result.manifest.SchemaVersion != 1 && result.manifest.SchemaVersion != 2) || result.manifest.ObjectFormat != "sha1" || result.manifest.Objects == nil || len(result.manifest.Objects) > maxObjects || !validLFSIndex(result.manifest.LFS) {
 		return snapshot{}, ErrCorrupt
 	}
 	var total int64
@@ -401,6 +418,7 @@ func (s *Store) verifyMaintenanceSnapshot(ctx context.Context, snap snapshot) (r
 	}
 	defer func() { err = errors.Join(err, reader.Close()) }()
 	packs := map[string]bool{}
+	lfsPointers := map[string]int64{}
 	for id, info := range snap.manifest.Objects {
 		if err := ctx.Err(); err != nil {
 			return report, err
@@ -408,6 +426,11 @@ func (s *Store) verifyMaintenanceSnapshot(ctx context.Context, snap snapshot) (r
 		object, err := reader.Get(ctx, id)
 		if err != nil {
 			return report, fmt.Errorf("verify object %s: %w", id, err)
+		}
+		if object.Type == "blob" {
+			if err := addLFSPointer(lfsPointers, object.Data); err != nil {
+				return report, errors.Join(ErrCorrupt, err)
+			}
 		}
 		links, err := gitLinks(GitObject{Type: object.Type, Data: object.Data})
 		if err != nil {
@@ -428,6 +451,14 @@ func (s *Store) verifyMaintenanceSnapshot(ctx context.Context, snap snapshot) (r
 		}
 	}
 	report.Packs = len(packs)
+	if err := compareLFSIndex(snap.manifest.LFS, lfsPointers); err != nil {
+		return report, err
+	}
+	report.LFSBytes, err = s.verifyLFSReferences(ctx, snap.metadata.ID, lfsPointers)
+	if err != nil {
+		return report, err
+	}
+	report.LFSObjects = len(lfsPointers)
 	return report, nil
 }
 

@@ -4,6 +4,12 @@ SSH is optional and complements HTTPS/PAT and browser OIDC authentication.
 It supports clone, fetch, pull, and push using the same bounded S3 Git engine.
 Create a repository in the UI first: pushing does not create repositories.
 
+Git LFS uses the registered SSH key through `git-lfs-authenticate`, then streams
+content over HTTPS through GitOne. It needs no PAT for SSH remotes. Credentials
+are scoped to a repository and operation, valid for new requests for 15 minutes,
+and subject to live key and permission checks. Admitted transfers may finish
+within the LFS timeout after the credential expires. See [Git LFS](git-lfs.md).
+
 ## User setup
 
 Generate a key locally (prefer a passphrase and your local SSH agent):
@@ -86,8 +92,10 @@ permissions just to run this command.
 
 This adds an SSH port, not a second HTTP listener. Expose it through a TCP
 load balancer/Service; an ordinary HTTP ingress does not route SSH. SSH only
-accepts exact `git-upload-pack 'namespace/repository.git'` and
-`git-receive-pack 'namespace/repository.git'` commands (optional leading slash).
+accepts exact `git-upload-pack 'namespace/repository.git'`,
+`git-receive-pack 'namespace/repository.git'`, and
+`git-lfs-authenticate namespace/repository.git upload|download` commands
+(optional leading slash; LFS paths may also be single-quoted).
 No shell, passwords, PTY, SFTP, arbitrary exec, TCP tunnels, or agent forwarding.
 
 Connections have a 10-second handshake deadline and 90-second total deadline,
@@ -102,6 +110,8 @@ and cancellation/deadline expiration releases queued work. The wait does not
 extend the connection's total deadline. The shared bounds allow 1 GiB of
 reachable content and 16 MiB per object; see the full
 [transport limits](git-authentication.md#current-transport-limits).
+LFS authentication occupies a short SSH command; its HTTP content transfers use
+the separate [LFS admission limits and timeout](git-lfs.md#configuration).
 Public and peer connections share the connection bound; saturation can reject
 authority checks and Git operations until connections close. Deploy TCP-level
 connection/rate controls where needed; there is no per-user rate limiter yet.

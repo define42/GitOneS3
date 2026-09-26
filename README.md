@@ -66,6 +66,9 @@ Git/LFS client -> public Service -> any gitone-N
   [SSH setup](docs/git-ssh.md).
 - Immutable indexed Git packs, bounded disk workspaces for incoming deltas and
   outgoing packs, incremental fetches, and compatibility with existing loose objects.
+- Git LFS batch, upload, verification, and ranged download through GitOne pods,
+  with bounded streaming, repository quotas, PAT/SSH authentication, and the
+  existing shard storage. See [Git LFS](docs/git-lfs.md).
 - Operator integrity checks, retained-generation restore, explicit repacking,
   and dry-run-first orphan collection fenced against concurrent writers.
   See [repository maintenance](docs/repository-maintenance.md).
@@ -84,7 +87,7 @@ external contracts unspecified. Git Smart HTTP is implemented for bounded
 repositories; these parts remain extension points:
 
 - the `control.git` compiler and persisted ACL generations;
-- LFS batch/content/locking/quota handlers (currently `501 Not Implemented`);
+- LFS file locking and pure SSH content transfer;
 - automatic compaction scheduling, history expiry, and cleanup of unclaimed repository IDs;
 - production mTLS/workload-identity integration, rate limits, and audit sinks.
 
@@ -180,11 +183,13 @@ and [performance measurements](docs/git-performance.md).
 HTTP request bodies have a 30-second read deadline, including bodies on health,
 authentication, and rejected requests. Git handlers use their existing 90-second
 operation deadline; forwarded Git RPC uploads also get a bounded 90-second read
-deadline. LFS routes currently return `501` and retain the default. After a
+deadline. LFS content transfers use their configurable 30-minute deadline,
+including forwarded requests. After a
 handler returns, the default deadline is restored to bound any unread-body
 drain. Responses have no server-wide write timeout. Configure ingress body-read
 timeouts and connection limits as additional protection, allowing enough time
-for supported Git transfers.
+for supported Git and LFS transfers. See [LFS configuration](docs/git-lfs.md#configuration)
+for separate transfer limits and memory guidance.
 
 ## Local Development
 
@@ -291,7 +296,9 @@ selected repositories are the recommended default. The optional all-accessible
 scope includes current and future personal/group repositories, including groups
 joined later, but always respects current namespace access and token permission.
 See [Git authentication and transport limits](docs/git-authentication.md).
-Git LFS remains unimplemented. Authentication is opt-in for existing deployments;
+Git LFS uses the same permissions and streams content through GitOne;
+see [LFS setup and upgrade requirements](docs/git-lfs.md).
+Authentication is opt-in for existing deployments;
 with it disabled, the previous unauthenticated protocol stubs remain.
 
 Protocol references: [Google OIDC](https://developers.google.com/identity/openid-connect/openid-connect)
@@ -322,7 +329,7 @@ Groups have three roles, inherited by repositories below that group:
 
 Git Smart HTTP additionally requires the token's selected-repository or
 all-accessible scope and read/write permission. Neither scope bypasses current
-group membership or role. LFS still returns `501` after authorization.
+group membership or role. Git LFS applies the same authorization to each request.
 Group roles apply across the whole namespace; per-repository overrides are
 not implemented yet. Membership is read from S3 on each request rather than
 embedded in the session, so revocations take effect on subsequent requests.
@@ -385,7 +392,8 @@ username and a personal access token covering that repository as the password.
 Native Git push updates the same durable objects and refs that the browser reads.
 An empty repository accepts its first push. See the
 [Git guide](docs/git-authentication.md) for setup, group authorization, and
-current size/protocol limits. Git LFS, browser file editing, repository deletion,
+current size/protocol limits. [Git LFS](docs/git-lfs.md) supports larger files.
+Browser file editing, repository deletion,
 and renaming are not implemented.
 
 ## Build And Test
@@ -397,6 +405,7 @@ make lint
 make ui-check            # TypeScript checks and Vite production build
 make test-ui             # Playwright against a running local Compose stack
 go test -tags=integration ./internal/auth -run '^TestGitPAT'  # requires native Git
+go test -race -tags=integration ./internal/lfs ./internal/sshserver -run LFS # requires Git and Git LFS
 ```
 
 Local source builds require Go 1.26+ and Node.js 22.12+ with npm; `make run` builds both

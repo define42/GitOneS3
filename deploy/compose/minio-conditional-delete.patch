@@ -1,0 +1,211 @@
+diff --git a/cmd/erasure-server-pool.go b/cmd/erasure-server-pool.go
+index 6b12ec4..5ae2667 100644
+--- a/cmd/erasure-server-pool.go
++++ b/cmd/erasure-server-pool.go
+@@ -1127,6 +1127,10 @@ func (z *erasureServerPools) DeleteObject(ctx context.Context, bucket string, ob
+ 	if err = checkDelObjArgs(ctx, bucket, object); err != nil {
+ 		return objInfo, err
+ 	}
++	// A condition for one object must never authorize deleting an entire prefix.
++	if opts.DeletePrefix && opts.CheckDeletePrecondFn != nil {
++		return objInfo, errInvalidArgument
++	}
+ 
+ 	if !opts.DeletePrefix { // DeletePrefix handles dir object encoding differently.
+ 		object = encodeDirObject(object)
+@@ -1150,12 +1154,27 @@ func (z *erasureServerPools) DeleteObject(ctx context.Context, bucket string, ob
+ 
+ 	pinfo, noReadQuorumPools, err := z.getPoolInfoExistingWithOpts(ctx, bucket, object, gopts)
+ 	if err != nil {
++		if opts.CheckDeletePrecondFn != nil && (isErrObjectNotFound(err) || isErrVersionNotFound(err)) {
++			return objInfo, PreConditionFailed{}
++		}
+ 		if _, ok := err.(InsufficientReadQuorum); ok {
+ 			return objInfo, InsufficientWriteQuorum{}
+ 		}
+ 		return objInfo, err
+ 	}
+ 
++	if opts.CheckDeletePrecondFn != nil {
++		// Keep evaluation and deletion under the same namespace lock. Pool
++		// discovery may tolerate unreadable metadata for unconditional deletes;
++		// a conditional delete must fail closed when the current ETag is unknown.
++		if pinfo.Err != nil && !pinfo.ObjInfo.DeleteMarker {
++			return objInfo, pinfo.Err
++		}
++		if err := opts.CheckDeletePrecondFn(pinfo.ObjInfo); err != nil {
++			return objInfo, err
++		}
++	}
++
+ 	// Delete marker already present we are not going to create new delete markers.
+ 	if pinfo.ObjInfo.DeleteMarker && opts.VersionID == "" {
+ 		pinfo.ObjInfo.Name = decodeDirObject(object)
+diff --git a/cmd/object-api-interface.go b/cmd/object-api-interface.go
+index 06c7374..909c430 100644
+--- a/cmd/object-api-interface.go
++++ b/cmd/object-api-interface.go
+@@ -72,17 +72,18 @@ type ObjectOptions struct {
+ 	CheckDMReplicationReady bool // Is delete marker ready to be replicated - set only during HEAD
+ 	Tagging                 bool // Is only in GET/HEAD operations to return tagging metadata along with regular metadata and body.
+ 
+-	UserDefined         map[string]string   // only set in case of POST/PUT operations
+-	ObjectAttributes    map[string]struct{} // Attribute tags defined by the users for the GetObjectAttributes request
+-	MaxParts            int                 // used in GetObjectAttributes. Signals how many parts we should return
+-	PartNumberMarker    int                 // used in GetObjectAttributes. Signals the part number after which results should be returned
+-	PartNumber          int                 // only useful in case of GetObject/HeadObject
+-	CheckPrecondFn      CheckPreconditionFn // only set during GetObject/HeadObject/CopyObjectPart preconditional valuation
+-	EvalMetadataFn      EvalMetadataFn      // only set for retention settings, meant to be used only when updating metadata in-place.
+-	DeleteReplication   ReplicationState    // Represents internal replication state needed for Delete replication
+-	Transition          TransitionOptions
+-	Expiration          ExpirationOptions
+-	LifecycleAuditEvent lcAuditEvent
++	UserDefined          map[string]string      // only set in case of POST/PUT operations
++	ObjectAttributes     map[string]struct{}    // Attribute tags defined by the users for the GetObjectAttributes request
++	MaxParts             int                    // used in GetObjectAttributes. Signals how many parts we should return
++	PartNumberMarker     int                    // used in GetObjectAttributes. Signals the part number after which results should be returned
++	PartNumber           int                    // only useful in case of GetObject/HeadObject
++	CheckPrecondFn       CheckPreconditionFn    // only set during GetObject/HeadObject/CopyObjectPart preconditional valuation
++	CheckDeletePrecondFn func(ObjectInfo) error // evaluated with current metadata while holding the DELETE namespace write lock
++	EvalMetadataFn       EvalMetadataFn         // only set for retention settings, meant to be used only when updating metadata in-place.
++	DeleteReplication    ReplicationState       // Represents internal replication state needed for Delete replication
++	Transition           TransitionOptions
++	Expiration           ExpirationOptions
++	LifecycleAuditEvent  lcAuditEvent
+ 
+ 	WantChecksum *hash.Checksum // x-amz-checksum-XXX checksum sent to PutObject/ CompleteMultipartUpload.
+ 
+diff --git a/cmd/object-handlers.go b/cmd/object-handlers.go
+index 6542c46..5e387dd 100644
+--- a/cmd/object-handlers.go
++++ b/cmd/object-handlers.go
+@@ -2619,6 +2619,26 @@ func (api objectAPIHandlers) DeleteObjectHandler(w http.ResponseWriter, r *http.
+ 		return
+ 	}
+ 
++	if values, present := r.Header[xhttp.IfMatch]; present {
++		if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
++			writeErrorResponse(ctx, w, toAPIError(ctx, errInvalidArgument), r.URL)
++			return
++		}
++		match := strings.TrimSpace(values[0])
++		opts.CheckDeletePrecondFn = func(oi ObjectInfo) error {
++			if oi.Name == "" || oi.DeleteMarker {
++				return PreConditionFailed{}
++			}
++			if _, err := DecryptObjectInfo(&oi, r); err != nil {
++				return err
++			}
++			if !isETagEqual(oi.ETag, match) {
++				return PreConditionFailed{}
++			}
++			return nil
++		}
++	}
++
+ 	os := newObjSweeper(bucket, object).WithVersion(opts.VersionID).WithVersioning(opts.Versioned, opts.VersionSuspended)
+ 
+ 	opts.SetEvalMetadataFn(func(oi *ObjectInfo, gerr error) (dsc ReplicateDecision, err error) {
+diff --git a/cmd/object-handlers-conditional-delete_test.go b/cmd/object-handlers-conditional-delete_test.go
+new file mode 100644
+index 0000000..7226706
+--- /dev/null
++++ b/cmd/object-handlers-conditional-delete_test.go
+@@ -0,0 +1,97 @@
++// Copyright (c) 2026 GitOne contributors.
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++package cmd
++
++import (
++	"bytes"
++	"context"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++
++	"github.com/minio/minio/internal/auth"
++	xhttp "github.com/minio/minio/internal/http"
++)
++
++func TestAPIDeleteObjectIfMatch(t *testing.T) {
++	defer DetectTestLeak(t)()
++	ExecObjectLayerAPITest(ExecObjectLayerAPITestArgs{
++		t: t, endpoints: []string{"DeleteObject"}, objAPITest: testAPIDeleteObjectIfMatch,
++	})
++}
++
++func testAPIDeleteObjectIfMatch(obj ObjectLayer, instanceType, bucket string, router http.Handler, credentials auth.Credentials, t *testing.T) {
++	ctx := context.Background()
++	put := func(t *testing.T, key, body string) ObjectInfo {
++		t.Helper()
++		info, err := obj.PutObject(ctx, bucket, key,
++			mustGetPutObjReader(t, bytes.NewReader([]byte(body)), int64(len(body)), "", ""), ObjectOptions{})
++		if err != nil {
++			t.Fatal(err)
++		}
++		return info
++	}
++	remove := func(t *testing.T, key, match string, extra map[string]string, want int) {
++		t.Helper()
++		headers := make(map[string]string)
++		if match != "" {
++			headers[xhttp.IfMatch] = match
++		}
++		for key, value := range extra {
++			headers[key] = value
++		}
++		req, err := newTestSignedRequestV4(http.MethodDelete, getDeleteObjectURL("", bucket, key),
++			0, nil, credentials.AccessKey, credentials.SecretKey, headers)
++		if err != nil {
++			t.Fatal(err)
++		}
++		rec := httptest.NewRecorder()
++		router.ServeHTTP(rec, req)
++		if rec.Code != want {
++			t.Fatalf("%s DELETE %q If-Match %q: status %d, want %d: %s", instanceType, key, match, rec.Code, want, rec.Body.String())
++		}
++	}
++	assertBody := func(t *testing.T, key, want string) {
++		t.Helper()
++		reader, err := obj.GetObjectNInfo(ctx, bucket, key, nil, nil, ObjectOptions{})
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer reader.Close()
++		body, err := io.ReadAll(reader)
++		if err != nil || string(body) != want {
++			t.Fatalf("%s GET %q: body %q, error %v, want %q", instanceType, key, body, err, want)
++		}
++	}
++	t.Run("wrong and stale ETags preserve replacement", func(t *testing.T) {
++		const key = "conditional-delete-stale"
++		first := put(t, key, "first body")
++		remove(t, key, `"wrong"`, nil, http.StatusPreconditionFailed)
++		assertBody(t, key, "first body")
++		second := put(t, key, "replacement body")
++		remove(t, key, `"`+first.ETag+`"`, nil, http.StatusPreconditionFailed)
++		assertBody(t, key, "replacement body")
++		remove(t, key, `W/"`+second.ETag+`"`, nil, http.StatusPreconditionFailed)
++		assertBody(t, key, "replacement body")
++		remove(t, key, `"`+second.ETag+`"`, nil, http.StatusNoContent)
++		if _, err := obj.GetObjectInfo(ctx, bucket, key, ObjectOptions{}); !isErrObjectNotFound(err) {
++			t.Fatalf("deleted object still present: %v", err)
++		}
++	})
++	t.Run("missing key and wildcard", func(t *testing.T) {
++		const key = "conditional-delete-wildcard"
++		remove(t, key, `"missing"`, nil, http.StatusPreconditionFailed)
++		remove(t, key, "*", nil, http.StatusPreconditionFailed)
++		put(t, key, "wildcard body")
++		remove(t, key, "*", nil, http.StatusNoContent)
++		remove(t, key, "", nil, http.StatusNoContent)
++	})
++	t.Run("conditional prefix deletion rejected", func(t *testing.T) {
++		const key = "conditional-prefix/object"
++		put(t, key, "keep this body")
++		remove(t, "conditional-prefix/", "*", map[string]string{xhttp.MinIOForceDelete: "true"}, http.StatusBadRequest)
++		assertBody(t, key, "keep this body")
++	})
++}

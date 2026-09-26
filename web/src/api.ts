@@ -50,6 +50,10 @@ export interface RepositoryBranch {
   name: string;
   commit: string;
 }
+export interface LFSObject {
+  oid: string;
+  size: number;
+}
 export interface RepositoryTree {
   ref: string;
   path: string;
@@ -59,6 +63,7 @@ export interface RepositoryTree {
     path: string;
     type: "file" | "directory";
     size: number;
+    lfs?: LFSObject;
   }[];
 }
 export interface RepositoryBlob {
@@ -68,6 +73,8 @@ export interface RepositoryBlob {
   content: string;
   size: number;
   binary: boolean;
+  lfs?: LFSObject;
+  tooLarge?: boolean;
 }
 export interface RepositoryCommit {
   id: string;

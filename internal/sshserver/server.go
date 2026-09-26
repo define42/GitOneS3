@@ -34,6 +34,12 @@ type Authority interface {
 	AuthorizeSSH(context.Context, auth.SSHPrincipal, string, bool) error
 }
 
+// LFSAuthority exchanges a freshly authenticated SSH identity for a scoped
+// GitOne HTTP credential. File bytes continue through the owning GitOne pod.
+type LFSAuthority interface {
+	IssueLFSCredentials(context.Context, auth.SSHPrincipal, []byte, string, string, string) (auth.LFSCredentials, error)
+}
+
 // Options supplies deployment-owned routing and distinct persistent SSH keys.
 type Options struct {
 	Address     string

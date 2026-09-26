@@ -76,10 +76,11 @@ type Branch struct {
 }
 
 type Entry struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-	Type string `json:"type"`
-	Size int64  `json:"size"`
+	Name string     `json:"name"`
+	Path string     `json:"path"`
+	Type string     `json:"type"`
+	Size int64      `json:"size"`
+	LFS  *LFSObject `json:"lfs,omitempty"`
 }
 
 type Tree struct {
@@ -90,12 +91,14 @@ type Tree struct {
 }
 
 type Blob struct {
-	Ref      string `json:"ref"`
-	Path     string `json:"path"`
-	Commit   string `json:"commit"`
-	Content  string `json:"content"`
-	Size     int64  `json:"size"`
-	IsBinary bool   `json:"binary"`
+	Ref      string     `json:"ref"`
+	Path     string     `json:"path"`
+	Commit   string     `json:"commit"`
+	Content  string     `json:"content"`
+	Size     int64      `json:"size"`
+	IsBinary bool       `json:"binary"`
+	LFS      *LFSObject `json:"lfs,omitempty"`
+	TooLarge bool       `json:"tooLarge,omitempty"`
 }
 
 type Commit struct {
@@ -132,6 +135,7 @@ type objectManifest struct {
 	SchemaVersion int                   `json:"schemaVersion"`
 	ObjectFormat  string                `json:"objectFormat"`
 	Objects       map[string]objectInfo `json:"objects"`
+	LFS           *lfsIndex             `json:"lfs,omitempty"`
 }
 
 type snapshot struct {
@@ -323,7 +327,7 @@ func (s *Store) load(ctx context.Context, namespace, name string) (snapshot, err
 		return snapshot{}, err
 	}
 	if result.refs.SchemaVersion != 1 || result.refs.Refs == nil || len(result.refs.Refs) > maxObjects ||
-		(result.manifest.SchemaVersion != 1 && result.manifest.SchemaVersion != 2) || result.manifest.ObjectFormat != "sha1" || result.manifest.Objects == nil || len(result.manifest.Objects) > maxObjects {
+		(result.manifest.SchemaVersion != 1 && result.manifest.SchemaVersion != 2) || result.manifest.ObjectFormat != "sha1" || result.manifest.Objects == nil || len(result.manifest.Objects) > maxObjects || !validLFSIndex(result.manifest.LFS) {
 		return snapshot{}, ErrCorrupt
 	}
 	for id, info := range result.manifest.Objects {

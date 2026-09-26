@@ -24,11 +24,16 @@ const (
 	opDelete
 	opList
 	opListPage
+	opCreateMultipart
+	opUploadPart
+	opCompleteMultipart
+	opAbortMultipart
 	operationCount
 )
 
 var operationNames = [operationCount]string{
 	"put", "get", "get_range", "head", "delete", "list", "list_page",
+	"create_multipart", "upload_part", "complete_multipart", "abort_multipart",
 }
 
 const resultCount = 9
@@ -183,7 +188,7 @@ func (s *Store) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	}
 	text.WriteString("# HELP gitone_storage_transferred_bytes_total Bytes consumed from upload and download streams, including upload retries.\n")
 	text.WriteString("# TYPE gitone_storage_transferred_bytes_total counter\n")
-	for _, op := range []operation{opPut, opGet, opGetRange} {
+	for _, op := range []operation{opPut, opGet, opGetRange, opUploadPart} {
 		fmt.Fprintf(&text, "gitone_storage_transferred_bytes_total{operation=%q} %d\n", operationNames[op], stats[op].Bytes)
 	}
 	text.WriteString("# HELP gitone_storage_operation_duration_seconds Completed operation duration including read body lifetime.\n")

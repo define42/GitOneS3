@@ -10,6 +10,7 @@
     "listenAddress",
     "spaceDiscoveryMode",
     "git",
+    "lfs",
     "metrics",
     "auth",
     "s3",
@@ -79,6 +80,20 @@
         "maxConcurrentOperations": {"type": "integer", "minimum": 1, "maximum": 32},
         "maxQueuedOperations": {"type": "integer", "minimum": 0, "maximum": 1024},
         "queueTimeout": {"type": "string", "minLength": 1, "description": "Positive Go duration no greater than 90s; validated by GitOne at startup."}
+      }
+    },
+    "lfs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "maxObjectBytes", "maxRepositoryBytes", "maxConcurrentTransfers", "maxQueuedTransfers", "queueTimeout", "transferTimeout"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "maxObjectBytes": {"type": "string", "minLength": 1, "description": "Positive byte size up to 64GiB."},
+        "maxRepositoryBytes": {"type": "string", "minLength": 1, "description": "Repository quota including active reservations, up to 1PiB."},
+        "maxConcurrentTransfers": {"type": "integer", "minimum": 1, "maximum": 32},
+        "maxQueuedTransfers": {"type": "integer", "minimum": 0, "maximum": 1024},
+        "queueTimeout": {"type": "string", "minLength": 1},
+        "transferTimeout": {"type": "string", "minLength": 1, "description": "Positive Go duration up to 12h; include ingress timeouts in deployment sizing."}
       }
     },
     "metrics": {

@@ -28,10 +28,13 @@ type peerRequest struct {
 	Command   string `json:"command,omitempty"`
 }
 
-type gitCommand struct{ service, namespace, repository string }
+type gitCommand struct{ service, namespace, repository, lfsOperation string }
 
 // Parse only Git's exact single-quoted command form; never invoke a shell.
 func (s *Server) parseCommand(command string) (gitCommand, error) {
+	if strings.HasPrefix(command, "git-lfs-authenticate ") {
+		return s.parseLFSCommand(command)
+	}
 	service, path, ok := strings.Cut(command, " ")
 	if !ok || (service != "git-upload-pack" && service != "git-receive-pack") ||
 		len(path) < 3 || path[0] != '\'' || path[len(path)-1] != '\'' || len(command) > 256 {
@@ -109,6 +112,9 @@ func (s *Server) execute(
 }
 
 func (s *Server) serveGit(ctx context.Context, request peerRequest, command gitCommand, channel ssh.Channel) error {
+	if command.service == "git-lfs-authenticate" {
+		return s.serveLFSAuthentication(ctx, request, command, channel)
+	}
 	authorize := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, authorityTimeout)
 		defer cancel()

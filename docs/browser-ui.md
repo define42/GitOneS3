@@ -97,8 +97,12 @@ browse. Public visibility and per-repository ACL overrides are not exposed.
 Repository pages show an HTTPS clone URL without credentials. Native Git uses
 your GitOne username and personal access token, and supports clone, fetch,
 pull, and push. Pushed files and commits appear in these same browser views.
-See [Git authentication](git-authentication.md) for setup and limits. Git LFS
-still returns `501`; browser file editing, renaming, and deletion are not implemented.
+See [Git authentication](git-authentication.md) for setup and limits.
+[Git LFS](git-lfs.md) files have an LFS indicator and show their actual size.
+Browser previews resolve pointers to the stored text for files up to 1 MiB,
+including READMEs. LFS files can also be downloaded through GitOne using the
+current browser session. Binary and larger files offer a download without
+rendering their contents. Browser file editing, renaming, and deletion are not implemented.
 
 Browsing currently selects branch names (not tags or arbitrary commit IDs).
 History returns at most 100 first-parent commits, directories at most 1,000

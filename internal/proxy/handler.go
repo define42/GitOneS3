@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -36,21 +37,23 @@ type Router interface {
 
 // HandlerOptions contains the immutable dependencies for routing middleware.
 type HandlerOptions struct {
-	LocalShard shard.ShardID
-	Router     Router
-	Resolver   Resolver
-	Next       http.Handler
-	Transport  http.RoundTripper
+	LocalShard         shard.ShardID
+	Router             Router
+	Resolver           Resolver
+	Next               http.Handler
+	Transport          http.RoundTripper
+	LFSTransferTimeout time.Duration
 }
 
 // Handler serves local requests and directly streams remote requests to their
 // owning shard.
 type Handler struct {
-	localShard   shard.ShardID
-	router       Router
-	resolver     Resolver
-	next         http.Handler
-	reverseProxy *httputil.ReverseProxy
+	localShard         shard.ShardID
+	router             Router
+	resolver           Resolver
+	next               http.Handler
+	reverseProxy       *httputil.ReverseProxy
+	lfsTransferTimeout time.Duration
 }
 
 // NewHandler validates dependencies and constructs shard-routing middleware.
@@ -66,6 +69,12 @@ func NewHandler(options HandlerOptions) (*Handler, error) {
 	}
 	if uint32(options.LocalShard) >= options.Router.ShardCount() {
 		return nil, fmt.Errorf("%w: local shard is out of range", ErrInvalidHandlerConfig)
+	}
+	if options.LFSTransferTimeout == 0 {
+		options.LFSTransferTimeout = 30 * time.Minute
+	}
+	if options.LFSTransferTimeout < 0 || options.LFSTransferTimeout > 12*time.Hour {
+		return nil, fmt.Errorf("%w: LFS transfer timeout must be positive and at most 12h", ErrInvalidHandlerConfig)
 	}
 
 	transport := options.Transport
@@ -85,11 +94,12 @@ func NewHandler(options HandlerOptions) (*Handler, error) {
 	}
 
 	return &Handler{
-		localShard:   options.LocalShard,
-		router:       options.Router,
-		resolver:     options.Resolver,
-		next:         options.Next,
-		reverseProxy: reverseProxy,
+		localShard:         options.LocalShard,
+		router:             options.Router,
+		resolver:           options.Resolver,
+		next:               options.Next,
+		reverseProxy:       reverseProxy,
+		lfsTransferTimeout: options.LFSTransferTimeout,
 	}, nil
 }
 
@@ -131,6 +141,22 @@ func (h *Handler) serveRemote(
 	request *http.Request,
 	destination *url.URL,
 ) {
+	if isLFSTransfer(request) {
+		// The public connection must permit the same bounded transfer time as
+		// its owner. Its default 30s body deadline is too short for large files.
+		ctx, cancel := context.WithTimeout(request.Context(), h.lfsTransferTimeout)
+		defer cancel()
+		request = request.WithContext(ctx)
+		deadline, _ := ctx.Deadline()
+		controller := http.NewResponseController(response)
+		for _, set := range []func(time.Time) error{controller.SetReadDeadline, controller.SetWriteDeadline} {
+			if err := set(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+				http.Error(response, "cannot establish LFS forwarding deadline", http.StatusServiceUnavailable)
+				return
+			}
+		}
+		defer func() { _ = controller.SetWriteDeadline(time.Time{}) }()
+	}
 	if isGitRPC(request) {
 		// The owner permits 90-second Git operations. Match that body budget
 		// on the entry connection, where owner authentication has not run yet.
@@ -166,6 +192,22 @@ func isGitRPC(request *http.Request) bool {
 		return false
 	}
 	return parts[2] == "git-upload-pack" || parts[2] == "git-receive-pack"
+}
+
+func isLFSTransfer(request *http.Request) bool {
+	if request.Method != http.MethodPut && request.Method != http.MethodGet && request.Method != http.MethodHead {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(request.URL.Path, "/"), "/")
+	if len(parts) != 6 || !strings.HasSuffix(parts[1], ".git") || parts[2] != "info" || parts[3] != "lfs" || parts[4] != "objects" || len(parts[5]) != 64 {
+		return false
+	}
+	for _, b := range parts[5] {
+		if (b < '0' || b > '9') && (b < 'a' || b > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // hasForwardedMarker identifies a previous hop, not an authenticated caller.

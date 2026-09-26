@@ -224,8 +224,12 @@ must also honor the durable lock before maintenance can run safely. Rollback
 after the first packed push requires a compatible binary or restoring the
 pre-upgrade storage backup. See the [upgrade instructions](repository-maintenance.md#prepare-the-deployment).
 
-Shallow/partial clones, Git protocol v2, SHA-256 repositories, LFS, server hooks,
-and branch-protection policy are not implemented. LFS routes return `501`.
+Git LFS supports larger files through streamed uploads/downloads with separate
+limits, SHA-256 verification, quotas, and the same repository permissions.
+See [Git LFS setup, storage, and upgrade requirements](git-lfs.md).
+
+Shallow/partial clones, Git protocol v2, SHA-256 Git repositories, server hooks,
+and branch-protection policy are not implemented. LFS file locking is unavailable.
 Browser file editing and repository rename/delete operations remain unavailable.
 
 ## Concurrency and memory

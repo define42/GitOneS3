@@ -38,6 +38,48 @@ function RepoIcon({ directory = false }: { directory?: boolean }) {
   );
 }
 
+function LFSBadge() {
+  return (
+    <span className="lfs-badge" title="Stored with Git LFS">
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="m12 3 9 5v8l-9 5-9-5V8l9-5Zm0 9 9-4M12 12 3 8m9 4v9M7.5 5.5l9 5" />
+      </svg>
+      <span>
+        <span className="sr-only">Git </span>LFS
+      </span>
+    </span>
+  );
+}
+
+function BlobContent({ blob }: { blob: RepositoryBlob }) {
+  if (blob.tooLarge) {
+    return (
+      <p className="compact-empty">
+        This file is too large to preview.
+        {blob.lfs && " Download it to view its contents."}
+      </p>
+    );
+  }
+  if (blob.binary) {
+    return (
+      <p className="compact-empty">
+        Binary file. A text preview is not available.
+      </p>
+    );
+  }
+  return <pre tabIndex={0}>{blob.content}</pre>;
+}
+
 function ErrorNotice({ message }: { message: string }) {
   return (
     <div className="notice error" role="alert">
@@ -67,7 +109,10 @@ function dateLabel(value: string) {
 }
 
 function byteLabel(value: number) {
-  return value < 1024 ? `${value} bytes` : `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024) return `${value} bytes`;
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  return `${(value / 1024 ** 3).toFixed(1)} GB`;
 }
 
 export function RepositoryList({ namespace }: { namespace: string }) {
@@ -644,6 +689,9 @@ export function RepositoryPage({
   const history = query.get("view") === "commits";
   const base = `/${namespace}/${name}`;
   const endpoint = `/repos/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`;
+  function lfsDownload(oid: string) {
+    return `/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}.git/info/lfs/objects/${encodeURIComponent(oid)}`;
+  }
   function destination(nextPath = "", nextHistory = false, ref = selectedRef) {
     const params = new URLSearchParams({ ref });
     if (nextPath) params.set("path", nextPath);
@@ -884,6 +932,7 @@ export function RepositoryPage({
                       >
                         <RepoIcon directory={entry.type === "directory"} />
                         <span>{entry.name}</span>
+                        {entry.lfs && <LFSBadge />}
                         <span className="file-size">
                           {entry.type === "directory"
                             ? "Directory"
@@ -902,28 +951,50 @@ export function RepositoryPage({
                   aria-label="File contents"
                 >
                   <div className="file-list-heading">
-                    <strong>{pathParts.at(-1)}</strong>
-                    <span className="muted">{byteLabel(data.blob.size)}</span>
+                    <div className="file-heading-name">
+                      <strong>{pathParts.at(-1)}</strong>
+                      {data.blob.lfs && <LFSBadge />}
+                    </div>
+                    <div className="file-heading-actions">
+                      <span className="muted">{byteLabel(data.blob.size)}</span>
+                      {data.blob.lfs && (
+                        <a
+                          href={lfsDownload(data.blob.lfs.oid)}
+                          download={pathParts.at(-1)}
+                          aria-label={`Download ${pathParts.at(-1)}`}
+                        >
+                          Download
+                        </a>
+                      )}
+                    </div>
                   </div>
-                  {data.blob.binary ? (
-                    <p className="compact-empty">
-                      Binary file. A text preview is not available.
-                    </p>
-                  ) : (
-                    <pre tabIndex={0}>{data.blob.content}</pre>
-                  )}
+                  <BlobContent blob={data.blob} />
                 </section>
               )}
-              {data.readme && !data.readme.binary && (
+              {data.readme && (!data.readme.binary || data.readme.lfs) && (
                 <section
                   className="panel file-preview readme-preview"
                   aria-label="README"
                 >
                   <div className="file-list-heading">
-                    <strong>README</strong>
-                    <a href={destination(data.readme.path)}>View file</a>
+                    <div className="file-heading-name">
+                      <strong>README</strong>
+                      {data.readme.lfs && <LFSBadge />}
+                    </div>
+                    <div className="file-heading-actions">
+                      {data.readme.lfs && (
+                        <a
+                          href={lfsDownload(data.readme.lfs.oid)}
+                          download={data.readme.path.split("/").at(-1)}
+                          aria-label={`Download ${data.readme.path.split("/").at(-1)}`}
+                        >
+                          Download
+                        </a>
+                      )}
+                      <a href={destination(data.readme.path)}>View file</a>
+                    </div>
                   </div>
-                  <pre tabIndex={0}>{data.readme.content}</pre>
+                  <BlobContent blob={data.readme} />
                 </section>
               )}
             </>

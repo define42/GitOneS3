@@ -17,6 +17,7 @@ import (
 	"github.com/define42/GitOneS3/internal/config"
 	"github.com/define42/GitOneS3/internal/gittransport"
 	"github.com/define42/GitOneS3/internal/httpserver"
+	"github.com/define42/GitOneS3/internal/lfs"
 	"github.com/define42/GitOneS3/internal/metrics"
 	"github.com/define42/GitOneS3/internal/protocol"
 	"github.com/define42/GitOneS3/internal/proxy"
@@ -88,7 +89,19 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		if err != nil {
 			return nil, fmt.Errorf("create Git transport: %w", err)
 		}
-		ownerHandler = protocol.NewHandler(gitHandler, nil)
+		var lfsHandler http.Handler
+		if cfg.LFS.Enabled {
+			lfsHandler, err = lfs.New(repositories, lfs.Options{
+				PublicURL: cfg.Auth.PublicURL, MaxObjectBytes: cfg.LFS.MaxObjectBytes,
+				MaxRepositoryBytes: cfg.LFS.MaxRepositoryBytes, MaxConcurrentTransfers: cfg.LFS.MaxConcurrentTransfers,
+				MaxQueuedTransfers: cfg.LFS.MaxQueuedTransfers, QueueTimeout: cfg.LFS.QueueTimeout,
+				TransferTimeout: cfg.LFS.TransferTimeout,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("create LFS transport: %w", err)
+			}
+		}
+		ownerHandler = protocol.NewHandler(gitHandler, lfsHandler)
 		provider, err := auth.NewOIDC(ctx, cfg.Auth)
 		if err != nil {
 			return nil, fmt.Errorf("create OIDC authentication: %w", err)
@@ -131,11 +144,12 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		}
 	}
 	routingHandler, err := proxy.NewHandler(proxy.HandlerOptions{
-		LocalShard: shard.ShardID(cfg.LocalShard),
-		Router:     requestRouter,
-		Resolver:   destinationResolver,
-		Next:       ownerHandler,
-		Transport:  forwardTransport,
+		LocalShard:         shard.ShardID(cfg.LocalShard),
+		Router:             requestRouter,
+		Resolver:           destinationResolver,
+		Next:               ownerHandler,
+		Transport:          forwardTransport,
+		LFSTransferTimeout: cfg.LFS.TransferTimeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create routing handler: %w", err)

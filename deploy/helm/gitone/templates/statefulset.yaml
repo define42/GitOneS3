@@ -85,6 +85,20 @@ spec:
               value: {{ .Values.git.maxQueuedOperations | quote }}
             - name: GITONE_GIT_QUEUE_TIMEOUT
               value: {{ .Values.git.queueTimeout | quote }}
+            - name: GITONE_LFS_ENABLED
+              value: {{ .Values.lfs.enabled | quote }}
+            - name: GITONE_LFS_MAX_OBJECT_BYTES
+              value: {{ .Values.lfs.maxObjectBytes | quote }}
+            - name: GITONE_LFS_MAX_REPOSITORY_BYTES
+              value: {{ .Values.lfs.maxRepositoryBytes | quote }}
+            - name: GITONE_LFS_MAX_CONCURRENT_TRANSFERS
+              value: {{ .Values.lfs.maxConcurrentTransfers | quote }}
+            - name: GITONE_LFS_MAX_QUEUED_TRANSFERS
+              value: {{ .Values.lfs.maxQueuedTransfers | quote }}
+            - name: GITONE_LFS_QUEUE_TIMEOUT
+              value: {{ .Values.lfs.queueTimeout | quote }}
+            - name: GITONE_LFS_TRANSFER_TIMEOUT
+              value: {{ .Values.lfs.transferTimeout | quote }}
             - name: GITONE_SPACE_DISCOVERY_MODE
               value: {{ .Values.spaceDiscoveryMode | quote }}
             - name: GITONE_SSH_ENABLED

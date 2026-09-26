@@ -217,6 +217,7 @@ func TestStore_CheckVerifiesConditionalOperationsOnce(t *testing.T) {
 	var exists bool
 	var version int
 	var putCalls int
+	var storedKey string
 	client := &fakeClient{
 		headBucket: func(*s3.HeadBucketInput) (*s3.HeadBucketOutput, error) {
 			return &s3.HeadBucketOutput{}, nil
@@ -234,6 +235,7 @@ func TestStore_CheckVerifiesConditionalOperationsOnce(t *testing.T) {
 				return nil, err
 			}
 			version++
+			storedKey = aws.ToString(input.Key)
 			data = bytes.Clone(body)
 			etag = fmt.Sprintf(`"v%d"`, version)
 			exists = true
@@ -257,6 +259,13 @@ func TestStore_CheckVerifiesConditionalOperationsOnce(t *testing.T) {
 				ContentLength: aws.Int64(int64(len(data))),
 				ETag:          aws.String(etag),
 			}, nil
+		},
+		listObjects: func(*s3.ListObjectsV2Input) (*s3.ListObjectsV2Output, error) {
+			output := &s3.ListObjectsV2Output{IsTruncated: aws.Bool(false)}
+			if exists {
+				output.Contents = []types.Object{{Key: aws.String(storedKey), ETag: aws.String(etag), Size: aws.Int64(int64(len(data)))}}
+			}
+			return output, nil
 		},
 		deleteObject: func(input *s3.DeleteObjectInput) (*s3.DeleteObjectOutput, error) {
 			if match := aws.ToString(input.IfMatch); match != "" && (!exists || match != etag) {

@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +8,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -188,7 +186,7 @@ func decodeGroupJSON(w http.ResponseWriter, r *http.Request, output any) error {
 
 // Git uses POST for reads and GET for push discovery. Authorize the protocol
 // operation, not just the HTTP verb. Unknown mutations require developer.
-func requiredGroupRole(w http.ResponseWriter, r *http.Request) (authz.Role, error) {
+func requiredGroupRole(_ http.ResponseWriter, r *http.Request) (authz.Role, error) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		if strings.HasSuffix(r.URL.Path, ".git/info/refs") {
@@ -206,38 +204,11 @@ func requiredGroupRole(w http.ResponseWriter, r *http.Request) (authz.Role, erro
 			return authz.RoleReader, nil
 		}
 		if strings.HasSuffix(r.URL.Path, ".git/info/lfs/objects/batch") {
-			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-			data, err := io.ReadAll(r.Body)
-			err = errors.Join(err, r.Body.Close())
+			write, err := lfsWriteRequest(r, []string{"objects", "batch"})
 			if err != nil {
 				return authz.RoleNone, err
 			}
-			var batch map[string]json.RawMessage
-			if err := json.Unmarshal(data, &batch); err != nil {
-				return authz.RoleNone, err
-			}
-			for key := range batch {
-				if strings.EqualFold(key, "operation") && key != "operation" {
-					return authz.RoleNone, errors.New("noncanonical LFS operation key")
-				}
-			}
-			var operation string
-			if err := json.Unmarshal(batch["operation"], &operation); err != nil {
-				return authz.RoleNone, err
-			}
-			if operation != "download" && operation != "upload" {
-				return authz.RoleNone, errors.New("invalid LFS operation")
-			}
-			// Forward canonical JSON so a downstream parser cannot interpret
-			// duplicate operation keys differently from this permission check.
-			data, err = json.Marshal(batch)
-			if err != nil {
-				return authz.RoleNone, err
-			}
-			r.Body = io.NopCloser(bytes.NewReader(data))
-			r.ContentLength = int64(len(data))
-			r.Header.Set("Content-Length", strconv.Itoa(len(data)))
-			if operation == "download" {
+			if !write {
 				return authz.RoleReader, nil
 			}
 		}

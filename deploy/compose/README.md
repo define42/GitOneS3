@@ -61,7 +61,33 @@ writes real Git objects to MinIO, and the UI can browse branches, files, and
 commit history. Group readers can browse but cannot create repositories. Create
 a repository-scoped token under **Access tokens** to clone, fetch, pull, or push
 using native Git; use your GitOne username and the token as the password.
-Git LFS still returns `501 Not Implemented`.
+Git LFS supports streaming upload/download using the same PAT or registered SSH
+key. All client transfers go through GitOne. See [LFS setup and limits](../../docs/git-lfs.md).
+
+The pinned MinIO release does not support the S3 lifecycle action
+`AbortIncompleteMultipartUpload`. Compose instead sets its server-wide
+`MINIO_API_STALE_UPLOADS_EXPIRY=48h` and
+`MINIO_API_STALE_UPLOADS_CLEANUP_INTERVAL=6h` to clean up abandoned uploads.
+The bucket lifecycle file only expires login transactions. Adding the unsupported
+multipart action there makes `minio-init` fail with `InvalidArgument` and exit 254.
+
+The local MinIO image also applies `minio-conditional-delete.patch` to the pinned
+release. It checks `DeleteObject`'s `If-Match` condition while holding the object
+write lock, as required by GitOne's repository lock release and garbage
+collection. The unpatched release ignores this condition; GitOne then exits with
+`wrong If-Match delete succeeded` and Compose reports unhealthy shards. `make run`
+builds the patched image and retains the existing volumes. GitOne's startup
+storage capability check remains enabled.
+
+The image build runs MinIO's focused DELETE regression tests. With an explicit
+`GITONE_TEST_S3_ENDPOINT` and standard AWS credentials, the native adapter test
+also verifies competing conditional writes/deletes in a temporary test bucket:
+
+```sh
+go test -race -tags=integration ./internal/storage/s3store -run '^TestS3ConditionalDelete$'
+```
+
+The test requires permission to create and remove its own randomly named bucket.
 
 Keycloak's admin username is `admin`; its generated password is in
 `.local/keycloak.env`. MinIO's username is `gitone-local`; its generated password

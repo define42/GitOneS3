@@ -36,6 +36,16 @@ git:
   maxQueuedOperations: 4
   queueTimeout: 5s
 
+# LFS bytes stream through GitOne with an 8MiB multipart buffer per upload.
+lfs:
+  enabled: true
+  maxObjectBytes: 1GiB
+  maxRepositoryBytes: 10GiB
+  maxConcurrentTransfers: 4
+  maxQueuedTransfers: 8
+  queueTimeout: 5s
+  transferTimeout: 30m
+
 # Opt in to /system/metrics with a separately provisioned bearer token.
 # The token must have at least 32 ASCII bytes. Empty existingSecret disables HTTP scrapes.
 metrics:

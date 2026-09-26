@@ -32,6 +32,13 @@ func WithWriteAuthorization(ctx context.Context, authorize func(context.Context)
 	return context.WithValue(ctx, writeAuthorizationKey{}, authorize)
 }
 
+// WriteAuthorization returns the live permission check attached by the owning
+// shard. A nil callback does not authorize writes.
+func WriteAuthorization(ctx context.Context) func(context.Context) error {
+	authorize, _ := ctx.Value(writeAuthorizationKey{}).(func(context.Context) error)
+	return authorize
+}
+
 type Handler struct {
 	store      *repository.Store
 	operations *admission

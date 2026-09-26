@@ -393,6 +393,10 @@ func (s *Store) publishObjects(ctx context.Context, base *GitSnapshot, updates [
 	if err != nil {
 		return err
 	}
+	lfsPointers, err := collectLFSPointers(ctx, reachable, get)
+	if err != nil {
+		return err
+	}
 	unlock, err := s.lockRepository(ctx, base.original.metadata.ID)
 	if err != nil {
 		return err
@@ -405,7 +409,10 @@ func (s *Store) publishObjects(ctx context.Context, base *GitSnapshot, updates [
 	if currentVersion != base.original.version {
 		return ErrConflict
 	}
-	manifest := objectManifest{SchemaVersion: 2, ObjectFormat: "sha1", Objects: reachable}
+	if err := s.validateLFSPointers(ctx, base.original.metadata.ID, lfsPointers); err != nil {
+		return err
+	}
+	manifest := objectManifest{SchemaVersion: 2, ObjectFormat: "sha1", Objects: reachable, LFS: &lfsIndex{Version: 1, Objects: lfsPointers}}
 	ids := []string{}
 	for id := range reachable {
 		if _, exists := base.original.manifest.Objects[id]; repack || !exists {

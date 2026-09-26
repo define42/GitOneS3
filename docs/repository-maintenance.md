@@ -14,22 +14,26 @@ and conditional-operation checks as the server.
 
 Before allowing any push or repack with this release, drain **all older readers
 and writers**, then replace them across the cluster. Include auxiliary processes
-that serve or modify repositories. A new push can publish a schema 2 manifest;
-older binaries only understand schema 1 and cannot read the updated repository.
-Serving a mixed fleet is unsupported. Resume traffic after every process uses
-this release. Rolling back to an older binary after a packed publication is also
-unsupported.
+that serve or modify repositories. New pushes and repacks publish schema 2
+manifests with an `lfs` reference index, including an empty index when there are
+no LFS pointers. Older binaries that understand schema 2 still reject this new
+field; binaries limited to schema 1 also cannot read packed manifests. Serving a
+mixed fleet is unsupported. Resume traffic after every process uses this release.
+Rolling back to an older binary after a new manifest publication is unsupported.
 
 Garbage collection has a separate concurrency requirement: every writer must
-honor the new durable repository lock. Older writers do not acquire it, so they
-must remain stopped during GC, restore, and repack. This also applies to a GC dry
-run, whose candidate report assumes exclusive access to writers. The CLI cannot
+honor the durable repository lock, including LFS finalization. Binaries from
+before repository locking was added must remain stopped during GC, restore,
+and repack. This also applies to a GC dry run, whose candidate report assumes
+exclusive access to writers. The CLI cannot
 verify that either rollout requirement has been met.
 
 Run commands with the owning shard's `POD_NAME`, `POD_NAMESPACE`,
 `GITONE_SHARD_COUNT`, cluster identity file, and bucket credentials. Credentials
 need the same read, write, list, and conditional-delete capabilities as serving.
-Even checks run the startup storage capability probes.
+LFS serving also requires multipart creation, part upload, completion, and abort;
+GC requires abort access to recover expired uploads. Even checks run the startup
+storage capability probes.
 
 The object store must provide strongly consistent reads and prefix listings,
 in addition to atomic conditional writes and deletes. GC discovers retained
@@ -48,6 +52,12 @@ plus 8 MiB of packs on disk. Repack can hold that cache and an output pack of th
 same maximum size. Filesystem metadata and temporary files left by interrupted
 commands also consume space. The repository remains authoritative in S3; these
 files can be regenerated.
+
+LFS transfers do not use these temporary workspaces. Uploads stream through one
+8 MiB part buffer per active upload, and downloads and integrity checks stream
+through small buffers. LFS bytes remain in the owning shard's private bucket;
+client transfers pass through GitOne. See [Git LFS](git-lfs.md) for configuration
+and client setup.
 
 Object bodies are read individually, but manifests, graph indexes, and artifact
 listings still use RAM. A manifest supports at most 100,000 objects; maintenance
@@ -70,7 +80,18 @@ gitone repository generations alice/demo
 
 `check` verifies the current generation's immutable snapshot digests, object
 digests, and Git graph connectivity. A successful report includes the generation,
-object/reference/pack counts, and total decoded object bytes.
+object/reference/pack counts, and total decoded Git object bytes. It also verifies
+the LFS reference index against Git pointer files, then streams each referenced
+LFS object to check its SHA-256, size, and recorded storage version. `lfsObjects`
+and `lfsBytes` report these objects separately from Git objects and bytes. Older
+generations without an index are inspected for pointers directly.
+
+Repositories imported from an external LFS service must have the corresponding
+LFS content uploaded to GitOne, including objects referenced only by retained
+history. Missing content prevents a successful check, push, or repack when that
+operation encounters its pointer. Disabling `GITONE_LFS_ENABLED` disables the
+network service only; it does not disable pointer validation or maintenance
+checks.
 
 `generations` lists retained immutable state snapshots. Each entry includes an
 exact `snapshot` key, generation number, timestamp, default branch, and whether
@@ -88,12 +109,17 @@ gitone repository restore alice/demo --snapshot '<exact-snapshot-key>'
 gitone repository check alice/demo
 ```
 
-Restore verifies the selected generation's objects and graph before publishing
-its references and manifest as a **new generation**. Existing generation history
-is retained. This restores repository contents and Git references; it does not
+Restore verifies the selected generation's Git objects, graph, and referenced
+LFS objects before publishing its references and manifest as a **new generation**.
+Existing generation history is retained. This restores repository contents and
+Git references; it does not
 restore deleted S3 objects, namespace ownership, or authentication records.
 Recover externally deleted data from your S3 backup or object-versioning process
 before using the command.
+
+The selected generation's LFS payloads and verified records must both remain
+available. Restore does not download missing payloads from an external LFS
+server or reconstruct them from pointer files.
 
 The repository metadata and current state publication object must remain valid.
 Restore can recover a good retained generation when the current refs or manifest
@@ -140,6 +166,46 @@ partial report, including completed deletions. Review the error and rerun the
 dry run after resolving it. The command does not claim to roll back successful
 deletions.
 
+### LFS objects and interrupted uploads
+
+GC retains every LFS object referenced by any retained generation, together with
+its verified record. Generations without an LFS index are scanned for pointers.
+A missing or corrupt LFS object in any retained generation prevents deletion,
+even when the current generation no longer references it.
+
+Successful LFS uploads can precede a Git push. An unreferenced verified record
+and its payload are protected while the record is within the GC grace period.
+After that period, GC can reclaim them if no retained generation references
+them. Payloads completed before a failed publication are also orphan candidates.
+
+Upload quota reservations last 24 hours. GC protects active reservations and
+their payloads regardless of a shorter grace period. Once a reservation has
+expired and is older than the grace period, `gc --apply` aborts its recorded
+multipart upload before deleting its reservation. A dry run does not abort
+uploads or delete records. Abort failures stop deletion and leave the
+reservation charged for a later retry. Finalization checks reservation ownership
+and expiry under the repository lock, so an expired uploader cannot publish
+after collection wins that lock.
+
+Configure the private bucket's lifecycle to abort incomplete multipart uploads
+left by crashes. In particular, a process can die after S3 creates an upload but
+before its returned upload ID is recorded; repository GC cannot identify those
+parts. Choose a lifecycle age longer than the 24-hour reservation lifetime.
+Lifecycle cleanup of incomplete multipart uploads does not replace repository
+GC for completed payloads or quota reservations.
+
+GC candidate and deleted byte totals describe listed objects and metadata.
+Incomplete multipart parts are invisible to normal object listings, so their
+bytes are not included in those report totals.
+
+The repository LFS quota counts completed physical payloads, including orphans,
+plus the declared size of unfinished reservations. A completed payload and its
+reservation are counted once. Failed or interrupted uploads can therefore keep
+quota occupied until cleanup succeeds. The default limits are 1 GiB per object
+and 10 GiB per repository, configured with `GITONE_LFS_MAX_OBJECT_BYTES` and
+`GITONE_LFS_MAX_REPOSITORY_BYTES`. Removing a branch does not free LFS content
+still referenced by retained history.
+
 ## Repack existing objects
 
 ```sh
@@ -152,6 +218,10 @@ and publishes a new generation. It supports migration from the original loose
 object layout and consolidation of current packs. Old generation snapshots
 retain their original artifacts, so repacking alone does not reduce retained
 S3 history size.
+
+Repack validates LFS pointers and publishes their reference index with the new
+Git manifest. LFS payloads stay separate from Git packs; repack does not combine
+or rewrite them.
 
 ## Recover a lock after a crash
 
@@ -188,7 +258,7 @@ If the lock changes, investigate the process still using the repository.
 Every executed maintenance operation prints one JSON object to stdout:
 
 ```json
-{"operation":"check","namespace":"alice","repository":"demo","report":{"repositoryId":"...","generation":1,"references":1,"objects":3,"bytes":256,"packs":0}}
+{"operation":"check","namespace":"alice","repository":"demo","report":{"repositoryId":"...","generation":1,"references":1,"objects":3,"bytes":256,"packs":0,"lfsObjects":0,"lfsBytes":0}}
 ```
 
 Failures can include an `error` field and a partial `report`; scripts must also

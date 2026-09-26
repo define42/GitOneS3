@@ -100,6 +100,7 @@ type Service struct {
 	api                http.Handler
 	tokenResolver      TokenResolver
 	tokenClient        *http.Client
+	lfsBatches         chan struct{}
 	sshPublicURL       string
 	spaceDiscoveryMode string
 }
@@ -133,6 +134,7 @@ func New(options Options) (*Service, error) {
 		repositories: repositories,
 		provider:     options.Provider, next: options.Next, origin: options.Config.PublicURL,
 		tokenResolver:      options.TokenResolver,
+		lfsBatches:         make(chan struct{}, 8),
 		sshPublicURL:       options.SSHPublicURL,
 		spaceDiscoveryMode: options.SpaceDiscoveryMode,
 		tokenClient: &http.Client{Transport: options.TokenTransport, Timeout: 5 * time.Second,
@@ -214,6 +216,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
+		if r.URL.Path == "/api/v1/users/"+route.Path.TopLevel+"/lfs/verify" {
+			s.serveVerifyLFSGrant(w, r, route.Path.TopLevel)
+			return
+		}
 		s.api.ServeHTTP(w, r)
 		return
 	}

@@ -432,8 +432,8 @@ func TestGroupLFSReadAuthorizationMatchesForwardedBody(t *testing.T) {
 		want       int
 	}{
 		{"download", `{"operation":"download","objects":[{"oid":"abc","size":3}]}`, 204},
-		{"duplicate normalized", `{"operation":"upload","operation":"download","objects":[]}`, 204},
-		{"upload last", `{"operation":"download","operation":"upload","objects":[]}`, 403},
+		{"duplicate rejected", `{"operation":"upload","operation":"download","objects":[]}`, 400},
+		{"upload last rejected", `{"operation":"download","operation":"upload","objects":[]}`, 400},
 		{"case ambiguity", `{"operation":"download","Operation":"upload","objects":[]}`, 400},
 		{"invalid operation", `{"operation":"delete","objects":[]}`, 400},
 	} {

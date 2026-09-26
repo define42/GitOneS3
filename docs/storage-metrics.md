@@ -52,11 +52,13 @@ the same token in Prometheus through your deployment's Secret integration.
 | --- | --- |
 | `gitone_storage_operations_total{operation,result}` | Completed storage calls, separated by outcome |
 | `gitone_storage_operation_duration_seconds{operation}` | Histogram of completed operation duration |
-| `gitone_storage_transferred_bytes_total{operation}` | Bytes read from upload/download streams, including upload retries |
+| `gitone_storage_transferred_bytes_total{operation}` | Bytes read from upload/download streams, including checksum passes and retries |
 | `gitone_storage_active_operations{operation}` | Calls in progress, including open download bodies |
 
-Operations are `put`, `get`, `get_range`, `head`, `delete`, `list`, and
-`list_page`. Results are `success`, `not_found`, `already_exists`,
+Operations are `put`, `get`, `get_range`, `head`, `delete`, `list`, `list_page`,
+`create_multipart`, `upload_part`, `complete_multipart`, and `abort_multipart`.
+The multipart operations cover LFS upload initialization, each part transfer,
+completion, and cleanup. Results are `success`, `not_found`, `already_exists`,
 `precondition_failed`, `conflict`, `canceled`, `deadline_exceeded`,
 `invalid_range`, and `error`. Expected conditional-write races and missing
 objects can be distinguished from backend failures.
@@ -67,6 +69,15 @@ streaming failures and close errors are included. An unclosed body remains
 visible as an active operation. Upload bytes reflect reads performed by the
 storage adapter, which may include retries or checksum reads, and are not a
 provider billing measure.
+
+LFS uploads use `upload_part` for byte accounting. Each part is read once to
+calculate its Content-MD5, then read by the S3 client; SDK checksum passes and
+retries can add further reads. This counter therefore measures consumed buffer
+bytes rather than exact network traffic. `complete_multipart` records object
+assembly and does not count the same payload again. LFS downloads use `get` or
+`get_range` and remain active until their S3 response body closes. Multipart
+initialization and part transfers can succeed even when a later hash check or
+authorization check rejects the overall LFS upload.
 
 ## Example alerts and queries
 

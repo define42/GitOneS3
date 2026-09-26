@@ -26,6 +26,21 @@ Use each pod's headless-Service address so counters stay associated with one
 shard. See [storage metrics](../../../docs/storage-metrics.md) for Prometheus
 configuration, metric names, and alert examples.
 
+## Git LFS
+
+LFS is enabled with authentication by default. The `lfs` values configure a
+1 GiB object limit, 10 GiB repository quota, four active transfers, eight queued
+transfers, a five-second queue wait, and a 30-minute transfer timeout. All content
+streams through GitOne pods and uses their namespace's shard bucket. LFS needs
+no temporary disk. Configure ingress body limits/timeouts and disable request
+and response buffering for these streams.
+
+Bucket credentials must support multipart upload and abort. Configure an
+incomplete-multipart lifecycle rule on `repos/` (for example, two days); do not
+expire completed repository objects by age. Replace all older pods before
+accepting Git pushes/repack: older binaries reject the new LFS manifest field.
+See [LFS configuration and migration](../../../docs/git-lfs.md).
+
 ## Google OIDC
 
 Enable authentication with:

@@ -5,8 +5,12 @@ RUN apk add --no-cache git
 ARG MINIO_VERSION=RELEASE.2025-10-15T17-29-55Z
 RUN git clone --depth 1 --branch "${MINIO_VERSION}" https://github.com/minio/minio.git /src
 WORKDIR /src
+COPY minio-conditional-delete.patch /tmp/minio-conditional-delete.patch
+RUN git apply --check /tmp/minio-conditional-delete.patch && \
+    git apply /tmp/minio-conditional-delete.patch
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go test ./cmd -run '^TestAPIDeleteObject(IfMatch|Handler)$' -count=1 -timeout=3m && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/minio .
 
 FROM alpine:3.22

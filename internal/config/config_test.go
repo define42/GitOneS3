@@ -17,6 +17,7 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	want := Config{
 		SSH: SSH{Port: 2222},
+		LFS: LFS{Enabled: true, MaxObjectBytes: 1 << 30, MaxRepositoryBytes: 10 << 30, MaxConcurrentTransfers: 4, MaxQueuedTransfers: 8, QueueTimeout: 5 * time.Second, TransferTimeout: 30 * time.Minute},
 		Git: Git{
 			MaxConcurrentOperations: DefaultGitMaxConcurrentOperations,
 			MaxQueuedOperations:     DefaultGitMaxQueuedOperations,

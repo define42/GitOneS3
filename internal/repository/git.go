@@ -319,7 +319,17 @@ func (s *Store) Tree(ctx context.Context, namespace, name, ref, path string) (Tr
 		if entry.kind == "gitlink" {
 			kind, size = "submodule", 0
 		}
-		result.Entries = append(result.Entries, Entry{Name: entry.name, Path: childPath, Type: kind, Size: size})
+		child := Entry{Name: entry.name, Path: childPath, Type: kind, Size: size}
+		if entry.kind == "blob" && size < maxLFSPointerBytes {
+			content, err := s.object(ctx, snap, entry.id, "blob")
+			if err != nil {
+				return Tree{}, err
+			}
+			if object, pointer, err := parseLFSPointer(content); pointer && err == nil {
+				child.LFS, child.Size = &object, object.Size
+			}
+		}
+		result.Entries = append(result.Entries, child)
 	}
 	slices.SortFunc(result.Entries, func(a, b Entry) int {
 		if a.Type != b.Type {
@@ -359,11 +369,52 @@ func (s *Store) Blob(ctx context.Context, namespace, name, ref, path string) (Bl
 	if err != nil {
 		return Blob{}, err
 	}
-	result := Blob{Ref: ref, Path: path, Commit: commit, Size: int64(len(content)), IsBinary: !utf8.Valid(content) || bytes.ContainsRune(content, 0)}
+	result := Blob{Ref: ref, Path: path, Commit: commit, Size: int64(len(content))}
+	if object, pointer, err := parseLFSPointer(content); pointer && err == nil {
+		result.LFS, result.Size = &object, object.Size
+		result.TooLarge = object.Size > maxObjectBytes
+		content, err = s.lfsPreview(ctx, namespace, name, object)
+		if err != nil {
+			return Blob{}, err
+		}
+	}
+	result.IsBinary = !utf8.Valid(content) || bytes.ContainsRune(content, 0)
 	if !result.IsBinary {
 		result.Content = string(content)
 	}
 	return result, nil
+}
+
+// lfsPreview reads at most one preview's worth of content. Larger files are
+// checked using metadata alone; downloads use the streaming LFS endpoint.
+func (s *Store) lfsPreview(ctx context.Context, namespace, name string, object LFSObject) ([]byte, error) {
+	if object.Size > maxObjectBytes {
+		verified, err := s.LFSStat(ctx, namespace, name, object.OID)
+		if err != nil {
+			return nil, err
+		}
+		if verified != object {
+			return nil, errors.Join(ErrCorrupt, ErrLFSHashMismatch)
+		}
+		return nil, nil
+	}
+	body, verified, err := s.LFSOpen(ctx, namespace, name, object.OID, 0, -1)
+	if err != nil {
+		return nil, err
+	}
+	if verified != object {
+		return nil, errors.Join(ErrCorrupt, ErrLFSHashMismatch, body.Close())
+	}
+	reader := &contextReader{ctx: ctx, reader: body}
+	content, readErr := io.ReadAll(io.LimitReader(reader, object.Size+1))
+	if err := errors.Join(readErr, body.Close()); err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(content)
+	if int64(len(content)) != object.Size || hex.EncodeToString(digest[:]) != object.OID {
+		return nil, errors.Join(ErrCorrupt, ErrLFSHashMismatch)
+	}
+	return content, nil
 }
 
 // Commits returns up to 100 commits along the selected branch's first-parent

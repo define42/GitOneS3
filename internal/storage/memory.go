@@ -23,6 +23,7 @@ type memoryObject struct {
 type MemoryStore struct {
 	mu      sync.RWMutex
 	objects map[string]memoryObject
+	uploads map[string]*memoryUpload
 	next    uint64
 }
 

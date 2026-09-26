@@ -65,6 +65,7 @@ type Config struct {
 	Auth                Auth
 	SSH                 SSH
 	Git                 Git
+	LFS                 LFS
 }
 
 // Git bounds active and queued Smart HTTP and SSH work per shard process.
@@ -210,11 +211,16 @@ func Load(lookup LookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	lfs, err := loadLFS(lookup)
+	if err != nil {
+		return Config{}, err
+	}
 	metricsToken, _ := lookup("GITONE_METRICS_TOKEN")
 	cfg := Config{
 		Auth:                auth,
 		SSH:                 ssh,
 		Git:                 git,
+		LFS:                 lfs,
 		ShardCount:          shardCount,
 		LocalShard:          localShard,
 		ListenAddress:       value(lookup, "GITONE_LISTEN_ADDRESS", DefaultListenAddress),
@@ -278,6 +284,9 @@ func loadGit(lookup LookupEnv) (Git, error) {
 
 // Validate checks invariants that must hold before the process accepts traffic.
 func (c Config) Validate() error {
+	if err := c.LFS.validate(); err != nil {
+		return err
+	}
 	if err := validateMetricsToken(c.MetricsToken); err != nil {
 		return err
 	}
@@ -569,6 +578,7 @@ func parseBytes(input string) (int64, error) {
 		multiplier uint64
 	}
 	units := []unit{
+		{suffix: "PiB", multiplier: 1 << 50},
 		{suffix: "TiB", multiplier: 1 << 40},
 		{suffix: "GiB", multiplier: 1 << 30},
 		{suffix: "MiB", multiplier: 1 << 20},
