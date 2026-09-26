@@ -278,78 +278,6 @@ hr {
 .skip-link:focus {
   top: 12px;
 }
-.topbar {
-  --focus: var(--header-focus);
-  min-height: 72px;
-  background: var(--header-bg);
-  color: var(--header-fg);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 24px;
-  padding: 12px 32px;
-}
-.brand {
-  display: inline-flex;
-  gap: 12px;
-  align-items: center;
-  color: var(--header-fg);
-  font-size: 23px;
-  font-weight: 650;
-  letter-spacing: -0.5px;
-}
-.brand:hover {
-  text-decoration: none;
-  color: var(--header-muted);
-}
-.header-divider {
-  height: 24px;
-  width: 1px;
-  background: var(--header-divider);
-}
-.header-link {
-  color: var(--header-fg);
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 36px;
-}
-.header-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  min-width: 0;
-  max-width: 100%;
-  gap: 16px;
-}
-.header-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 36px;
-  border-radius: 6px;
-  border: 1px solid var(--header-control-border);
-  background: transparent;
-  color: var(--header-fg);
-  padding: 5px 12px;
-  white-space: nowrap;
-}
-.header-button:hover {
-  border-color: var(--header-fg);
-  text-decoration: none;
-  background: var(--header-hover);
-}
-.account-link {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--header-fg);
-  min-width: 0;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
 .avatar {
   width: 33px;
   height: 33px;
@@ -755,37 +683,41 @@ label {
 .sidebar-note p {
   margin-top: 7px;
 }
-.personal-card {
+.workspace-heading {
+  margin-bottom: 24px;
+}
+.workspace-namespace {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 15px;
-  padding: 21px;
-  margin-bottom: 32px;
-  background: var(--subtle);
+  gap: 6px 10px;
+  color: var(--muted);
+  font-size: 13px;
 }
-.personal-card .muted {
-  font-size: 12px;
-  margin-top: 4px;
-}
-.space-name {
-  font-size: 17px;
-  font-weight: 600;
+.workspace-namespace a {
   overflow-wrap: anywhere;
+  min-width: 0;
 }
-.personal-card > div,
+.workspace-namespace svg {
+  flex: none;
+}
 .group-row > div,
 .group-heading > div {
   min-width: 0;
 }
-.personal-email {
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 12px;
-  overflow-wrap: anywhere;
+.section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.section-heading h2 {
   min-width: 0;
 }
-.section-heading {
-  margin-bottom: 17px;
+.section-heading .button {
+  flex: none;
 }
 .group-search {
   margin-bottom: 16px;
@@ -796,8 +728,9 @@ label {
 .group-row {
   display: flex;
   align-items: center;
-  gap: 15px;
-  padding: 20px;
+  gap: 12px;
+  min-height: 56px;
+  padding: 11px 16px;
   color: var(--text);
   border-bottom: 1px solid var(--separator);
 }
@@ -808,15 +741,13 @@ label {
   background: var(--subtle);
   text-decoration: none;
 }
+.group-row:focus-visible {
+  outline-offset: -3px;
+}
 .group-row strong {
   color: var(--blue);
-  font-size: 16px;
+  font-size: 14px;
   overflow-wrap: anywhere;
-}
-.group-row p {
-  font-size: 12px;
-  color: var(--muted);
-  margin-top: 4px;
 }
 .group-row .badge {
   margin-left: auto;
@@ -828,8 +759,8 @@ label {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 39px;
-  height: 39px;
+  width: 32px;
+  height: 32px;
   border: 1px solid var(--separator);
   border-radius: 7px;
   background: var(--subtle);
@@ -1753,9 +1684,6 @@ summary:focus-visible,
     grid-template-columns: 190px minmax(0, 1fr);
     gap: 26px;
   }
-  .personal-email {
-    display: none;
-  }
   .settings-layout {
     grid-template-columns: 180px minmax(0, 1fr);
     gap: 25px;
@@ -1764,58 +1692,17 @@ summary:focus-visible,
     grid-template-columns: minmax(0, 1fr) 220px;
     gap: 25px;
   }
-  .header-actions {
-    gap: 15px;
-  }
 }
 @media (max-width: 760px) {
   :root {
     font-size: 15px;
   }
-  .topbar {
-    padding: 13px 20px;
-    gap: 15px;
-    min-height: 66px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .header-divider,
-  .topbar > .header-link,
-  .new-link,
-  .account-link span:not(.avatar) {
-    display: none;
-  }
-  .header-actions {
-    grid-column: 1 / -1;
-    gap: 12px;
-  }
-  .header-button,
-  .header-link {
-    min-height: 40px;
-  }
-  .brand {
-    font-size: 21px;
-    gap: 8px;
-  }
   .workspace {
     display: block;
-    padding-top: 26px;
+    padding-top: 24px;
   }
   .sidebar {
-    border: 0;
-    padding: 0;
-    margin-bottom: 26px;
-  }
-  .identity,
-  .sidebar-note {
     display: none;
-  }
-  .sidebar nav {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-    border-bottom: 1px solid var(--separator);
-    padding-bottom: 13px;
   }
   .side-link {
     font-size: 12px;
@@ -1847,13 +1734,6 @@ summary:focus-visible,
   }
   .button.small {
     min-height: 38px;
-  }
-  .personal-card {
-    padding: 17px;
-    gap: 12px;
-  }
-  .personal-card .badge {
-    margin-left: auto;
   }
   .empty-state {
     padding: 32px 18px;
@@ -1987,23 +1867,11 @@ summary:focus-visible,
   .container {
     width: calc(100% - 28px);
   }
-  .topbar {
-    padding-inline: 14px;
-  }
-  .header-actions {
-    gap: 8px;
-  }
-  .header-actions .account-link {
-    display: none;
-  }
   .page-heading {
     flex-wrap: wrap;
   }
-  .personal-card .badge {
-    display: none;
-  }
   .group-row {
-    padding: 15px;
+    padding-inline: 12px;
     gap: 10px;
   }
   .group-row > svg {

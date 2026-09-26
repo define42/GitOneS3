@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { accountControl, openAccountMenu } from "./header-helpers";
 
 async function register(
   page: Page,
@@ -15,7 +16,8 @@ async function register(
     .fill(`${account}-dev-password`);
   await page.getByRole("button", { name: "Sign In", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/${namespace}/?$`));
-  await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible();
+  await expect(accountControl(page)).toHaveAccessibleName(`Account: ${namespace}`);
+  await expect(accountControl(page)).toBeVisible();
 }
 
 test("register, share a group, accept, change roles, revoke access, and sign out/in", async ({
@@ -187,6 +189,7 @@ test("register, share a group, accept, change roles, revoke access, and sign out
     });
 
     await test.step("sign out and sign back in using the claimed username", async () => {
+      await openAccountMenu(page);
       await page.getByRole("button", { name: /sign out/i }).click();
       await expect(page).toHaveURL(/\/auth\/login\?signedOut=1$/);
       const signedOut = await (
@@ -231,9 +234,8 @@ test("register, share a group, accept, change roles, revoke access, and sign out
         .getByRole("button", { name: "Sign In", exact: true })
         .click();
       await expect(page).toHaveURL(new RegExp(`/${alice}/?$`));
-      await expect(
-        page.getByRole("button", { name: /sign out/i }),
-      ).toBeVisible();
+      await expect(accountControl(page)).toHaveAccessibleName(`Account: ${alice}`);
+      await expect(accountControl(page)).toBeVisible();
     });
     expect(errors).toEqual([]);
   } finally {

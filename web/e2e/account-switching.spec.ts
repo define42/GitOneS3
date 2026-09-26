@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { Session } from "../src/api";
+import { accountControl, openAccountMenu } from "./header-helpers";
 
 async function beginAuthentication(
   page: Page,
@@ -54,9 +55,8 @@ async function expectAccount(
   account: "alice" | "bob",
 ): Promise<Session> {
   await expect(page).toHaveURL(new RegExp(`/${namespace}/?$`));
-  await expect(
-    page.getByRole("banner").getByRole("button", { name: /sign out/i }),
-  ).toBeVisible();
+  await expect(accountControl(page)).toHaveAccessibleName(`Account: ${namespace}`);
+  await expect(accountControl(page)).toBeVisible();
   const response = await page.request.get("/api/v1/session");
   expect(response.ok()).toBe(true);
   const session = (await response.json()) as Session;
@@ -73,6 +73,7 @@ async function signOutPreservingProviderSession(page: Page, providerURL: string)
     (cookie) => cookie.name.startsWith("KEYCLOAK_"),
   );
   expect(providerCookies.length).toBeGreaterThan(0);
+  await openAccountMenu(page);
   await page
     .getByRole("banner")
     .getByRole("button", { name: /sign out/i })

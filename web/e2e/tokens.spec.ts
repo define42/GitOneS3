@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { openAccountMenu } from "./header-helpers";
 
 // Token responses and the one-time reveal must never enter Playwright artifacts.
 test.use({ trace: "off", screenshot: "off", video: "off" });
@@ -221,9 +222,10 @@ test("generate scoped tokens, use Git authentication, hide secrets, and revoke",
       .click();
     await page.getByLabel("Your new access token", { exact: true }).waitFor();
     // Navigate away without closing the reveal, then return through browser history.
+    await openAccountMenu(page);
     await page
+      .getByRole("banner")
       .getByRole("link", { name: "Your spaces", exact: true })
-      .first()
       .click();
     await expect(page).toHaveURL(`${baseURL}/`);
     await page.goBack();

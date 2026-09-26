@@ -30,6 +30,11 @@ colors cover text, surfaces, borders, status messages, and keyboard focus.
 
 ### Accounts and repositories
 
+The account button in the header opens **Your spaces**, **Settings**, and
+**Sign out**. On small screens, this menu provides workspace
+navigation. The dashboard keeps **New repository** beside the repository list
+and **New group** beside the searchable, compact group list.
+
 1. Open `/auth/register`, choose an available lowercase username, and authenticate
    with the configured Google or generic OIDC provider. The verified provider
    identity permanently claims that username; an email match alone is not enough.

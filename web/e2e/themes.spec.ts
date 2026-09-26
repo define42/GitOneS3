@@ -5,6 +5,7 @@ import {
   type Locator,
   type Page,
 } from "@playwright/test";
+import { accountControl, openAccountMenu } from "./header-helpers";
 
 const themeKey = "gitone.theme";
 const username = "theme-user";
@@ -190,8 +191,12 @@ for (const authenticated of [false, true]) {
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
           await expectHeaderControlReachable(page, themeControl(page));
           if (authenticated) {
+            await expectHeaderControlReachable(page, accountControl(page));
+            await openAccountMenu(page);
             await expectHeaderControlReachable(page, banner.getByRole("link", { name: "Settings", exact: true }));
             await expectHeaderControlReachable(page, banner.getByRole("button", { name: "Sign out", exact: true }));
+            await page.keyboard.press("Escape");
+            await expect(accountControl(page)).toHaveAttribute("aria-expanded", "false");
           } else {
             await expectHeaderControlReachable(page, banner.getByRole("link", { name: "Sign in", exact: true }));
             await expectHeaderControlReachable(page, banner.getByRole("link", { name: "Create account", exact: true }));
@@ -462,7 +467,7 @@ test("dark dashboard, personal settings and repository code fit a 375px viewport
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Your spaces", exact: true })).toBeVisible();
   await expect(page.locator(".repository-row")).toBeVisible();
-  await expectReadable(page.locator(".personal-card"), true);
+  await expectReadable(page.locator(".workspace-namespace"));
   await expectReadable(page.locator(".repository-row"), true);
   await noOverflow();
   await page.goto("/auth/ssh-keys");

@@ -1,5 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
+import { openAccountMenu } from "./header-helpers";
 
 function publicKey() {
   const { publicKey: key } = generateKeyPairSync("ed25519");
@@ -41,9 +42,10 @@ test("register and revoke SSH keys; clone personal and group repositories with o
     "X-CSRF-Token": session.csrfToken,
   };
   try {
+    await openAccountMenu(page);
     await page
+      .getByRole("banner")
       .getByRole("link", { name: "Settings", exact: true })
-      .first()
       .click();
     await page.getByRole("link", { name: "SSH keys", exact: true }).click();
     await expect(page).toHaveURL(`${baseURL}/auth/ssh-keys`);

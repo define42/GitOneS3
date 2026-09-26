@@ -6,7 +6,7 @@ import { NewRepository, RepositoryList, RepositoryPage } from "./Repositories";
 import { TokensPage } from "./Tokens";
 import { SSHKeysPage } from "./SSHKeys";
 import { loadSpaces } from "./spaces";
-import { ThemeControl } from "./ThemeControl";
+import { Header } from "./Header";
 
 function Icon({
   name = "branch",
@@ -91,85 +91,6 @@ function Avatar({ name, large = false }: { name: string; large?: boolean }) {
     <span className={`avatar ${large ? "large" : ""}`} aria-hidden="true">
       {name.slice(0, 2).toUpperCase()}
     </span>
-  );
-}
-
-function Header({ session }: { session: Session | null }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  async function logout() {
-    if (!session) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api("/logout", { method: "POST", csrf: session.csrfToken });
-      window.location.assign("/auth/login?signedOut=1");
-    } catch (e) {
-      setError(errorMessage(e));
-      setBusy(false);
-    }
-  }
-  return (
-    <>
-      <a className="skip-link" href="#main">
-        Skip to main content
-      </a>
-      <header className="topbar">
-        <a href="/" className="brand">
-          <Icon size={28} />
-          <span>GitOne</span>
-        </a>
-        <span className="header-divider" />
-        <a href="/" className="header-link">
-          Your spaces
-        </a>
-        <ThemeControl />
-        {session && (
-          <div className="header-actions">
-            {session.authenticated ? (
-              <>
-                <a className="header-link new-link" href="/auth/new-repository">
-                  <Icon name="plus" size={18} />
-                  New repository
-                </a>
-                <a className="header-link new-link" href="/auth/new-group">
-                  <Icon name="plus" size={18} />
-                  New group
-                </a>
-                <a href={`/${session.username}`} className="account-link">
-                  <Avatar name={session.username!} />
-                  <span>{session.username}</span>
-                </a>
-                <a className="header-link" href="/auth/tokens">
-                  Settings
-                </a>
-                <button
-                  className="header-button"
-                  onClick={logout}
-                  disabled={busy}
-                >
-                  {busy ? "Signing out…" : "Sign out"}
-                </button>
-              </>
-            ) : (
-              <>
-                <a className="header-link" href="/auth/login">
-                  Sign in
-                </a>
-                <a className="header-button" href="/auth/register">
-                  Create account
-                </a>
-              </>
-            )}
-          </div>
-        )}
-      </header>
-      {error && (
-        <div className="container">
-          <Notice>{error}</Notice>
-        </div>
-      )}
-    </>
   );
 }
 
@@ -377,18 +298,6 @@ function Sidebar({ session }: { session: Session }) {
           <Icon name="branch" />
           Your spaces
         </a>
-        <a href={`/${session.username}`} className="side-link">
-          <Icon name="lock" />
-          Personal space
-        </a>
-        <a href="/auth/new-repository" className="side-link">
-          <Icon name="plus" />
-          New repository
-        </a>
-        <a href="/auth/new-group" className="side-link">
-          <Icon name="plus" />
-          Create a group
-        </a>
         <a href="/auth/tokens" className="side-link">
           <Icon name="lock" />
           Settings
@@ -435,30 +344,16 @@ function Dashboard({ session }: { session: Session }) {
     <main id="main" className="workspace container">
       <Sidebar session={session} />
       <div className="workspace-content">
-        <div className="page-heading">
+        <div className="page-heading workspace-heading">
           <div>
-            <p className="eyebrow">YOUR WORKSPACE</p>
             <h1>Your spaces</h1>
-            <p className="muted">
-              A personal home and the teams you’re part of.
+            <p className="workspace-namespace">
+              <Icon name="lock" size={16} />
+              <a href={`/${session.username}`}>/{session.username}</a>
+              <span>Personal space</span>
             </p>
           </div>
-          <a className="button primary" href="/auth/new-group">
-            <Icon name="plus" size={17} />
-            New group
-          </a>
         </div>
-        <section aria-label="Personal space" className="panel personal-card">
-          <Avatar name={session.username!} />
-          <div>
-            <a className="space-name" href={`/${session.username}`}>
-              /{session.username}
-            </a>
-            <p className="muted">Your personal namespace</p>
-          </div>
-          <span className="badge">Personal</span>
-          <span className="personal-email">{session.identity?.email}</span>
-        </section>
         <RepositoryList namespace={session.username!} />
         {error && (
           <Notice>
@@ -494,7 +389,7 @@ function Dashboard({ session }: { session: Session }) {
             ))}
           </section>
         )}
-        <section>
+        <section aria-label="Shared groups">
           <div className="section-heading">
             <h2>
               Shared groups{" "}
@@ -502,6 +397,10 @@ function Dashboard({ session }: { session: Session }) {
                 {spaces?.filter((s) => !s.invited).length ?? 0}
               </span>
             </h2>
+            <a className="button" href="/auth/new-group">
+              <Icon name="plus" size={17} />
+              New group
+            </a>
           </div>
           <label htmlFor="group-search" className="sr-only">
             Find a group
@@ -528,7 +427,6 @@ function Dashboard({ session }: { session: Session }) {
                   </span>
                   <div>
                     <strong>/{space.name}</strong>
-                    <p>Shared group</p>
                   </div>
                   <RoleBadge role={space.role} />
                   <Icon name="arrow" size={18} />
@@ -551,11 +449,6 @@ function Dashboard({ session }: { session: Session }) {
                     ? "Try searching for a different group name."
                     : "Create a shared space, invite your collaborators, and decide who can do what."}
                 </p>
-                {!filter && (
-                  <a className="button" href="/auth/new-group">
-                    Create your first group
-                  </a>
-                )}
               </div>
             )
           )}
