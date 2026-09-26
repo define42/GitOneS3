@@ -64,8 +64,15 @@ Git/LFS client -> public Service -> any gitone-N
 - Optional Git-over-SSH clone/fetch/push, SSH public-key settings, authenticated
   shard forwarding, and live key/namespace permission checks. See
   [SSH setup](docs/git-ssh.md).
-- Bounded live-compaction planning that keeps large packs intact, selects only
-  fragmented small packs plus the incoming pack, and queues oversized work.
+- Immutable indexed Git packs, bounded disk workspaces for incoming deltas and
+  outgoing packs, incremental fetches, and compatibility with existing loose objects.
+- Operator integrity checks, retained-generation restore, explicit repacking,
+  and dry-run-first orphan collection fenced against concurrent writers.
+  See [repository maintenance](docs/repository-maintenance.md).
+- Authenticated, per-shard Prometheus storage metrics for operation counts,
+  latency, bytes, errors, and active operations. See [metrics](docs/storage-metrics.md).
+- Bounded compaction policy planning for future automatic scheduling; explicit
+  `repository repack` consolidates current objects today.
 - S3-backed readiness, structured request logs, graceful HTTP
   shutdown, a non-root container image, and a configurable Helm deployment.
 - Exact pack-fragmentation defaults from the architecture document.
@@ -78,9 +85,8 @@ repositories; these parts remain extension points:
 
 - the `control.git` compiler and persisted ACL generations;
 - LFS batch/content/locking/quota handlers (currently `501 Not Implemented`);
-- live pack compaction, retained-generation tracing, and garbage collection;
-- production mTLS/workload-identity integration, rate limits, metrics, and
-  audit sinks.
+- automatic compaction scheduling, history expiry, and cleanup of unclaimed repository IDs;
+- production mTLS/workload-identity integration, rate limits, and audit sinks.
 
 The code never falls back to a local bare repository for these operations.
 Doing so would violate the S3-authoritative failure model.
@@ -99,6 +105,8 @@ internal/storage/s3store/   fixed-bucket AWS S3 adapter
 internal/authz/             inherited shard-local authorization
 internal/protocol/          Smart HTTP and LFS owner-side dispatch
 internal/gittransport/      bounded Smart HTTP upload/receive-pack engine
+internal/gitpack/           disk-backed pack validation and canonical pack encoding
+internal/metrics/           bounded Prometheus object-store instrumentation
 internal/repository/        repository metadata, Git objects, and browser reads
 internal/maintenance/       bounded compaction planning
 internal/httpserver/        health, logging, and graceful lifecycle
@@ -137,6 +145,7 @@ from the mounted cluster identity.
 | `GITONE_S3_PATH_STYLE` | `false` | Path-style S3 addressing |
 | `GITONE_S3_TLS` | `true` | Endpoint validation policy |
 | `GITONE_S3_BUCKET_PREFIX` | `gitone-shard` | Per-shard bucket prefix |
+| `GITONE_METRICS_TOKEN` | unset | Enable authenticated `/system/metrics`; see [metrics](docs/storage-metrics.md) |
 | `GITONE_GIT_MAX_CONCURRENT_OPERATIONS` | `1` | Shared active Git operations per shard process; 1–32 |
 | `GITONE_GIT_MAX_QUEUED_OPERATIONS` | `4` | Waiting Git operations per shard process; 0–1024, zero disables waiting |
 | `GITONE_GIT_QUEUE_TIMEOUT` | `5s` | Maximum admission wait; positive Go duration up to `90s` |
@@ -150,7 +159,7 @@ from the mounted cluster identity.
 | `GITONE_PACK_LIVE_COMPACTION_MAX_INPUT_PACKS` | `32` | Synchronous compaction pack bound |
 
 AWS credentials use the SDK's normal provider chain. The buckets must exist
-before pods start. Each process checks that its bucket honors `If-Match` and
+before pods start. Each process checks that its bucket honors `If-Match` writes/deletes and
 `If-None-Match` writes before it starts serving; failed
 probes keep the shard unavailable. Production qualification must also run
 concurrent CAS acceptance tests against the exact provider/version. Configure a
@@ -160,8 +169,11 @@ lifecycle rule for abandoned objects and old versions below
 Git limits are shared across Smart HTTP and SSH, not independent per transport
 or repository. Measure peak **container memory** under overlapping operations on
 your largest supported repositories before raising active concurrency. The
-existing repository/object bounds still apply, and actual transfers still load
-the full bounded Git snapshot. `GOMEMLIMIT` is a soft Go runtime target, not a
+Git engine supports up to 1 GiB of reachable decoded content, 100,000 objects,
+and 16 MiB per decoded object. Object payloads are staged on disk or read one at a
+time; metadata remains bounded in memory. Allow approximately 4.1 GiB of temporary
+file contents per active push (plus filesystem overhead), and measure container
+memory, including page cache. Set `TMPDIR` to a writable workspace; Helm already does. `GOMEMLIMIT` is a soft Go runtime target, not a
 hard container-memory guarantee. See [Git admission and limits](docs/git-authentication.md#concurrency-and-memory)
 and [performance measurements](docs/git-performance.md).
 

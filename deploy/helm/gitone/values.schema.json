@@ -10,6 +10,7 @@
     "listenAddress",
     "spaceDiscoveryMode",
     "git",
+    "metrics",
     "auth",
     "s3",
     "clusterIdentity",
@@ -78,6 +79,15 @@
         "maxConcurrentOperations": {"type": "integer", "minimum": 1, "maximum": 32},
         "maxQueuedOperations": {"type": "integer", "minimum": 0, "maximum": 1024},
         "queueTimeout": {"type": "string", "minLength": 1, "description": "Positive Go duration no greater than 90s; validated by GitOne at startup."}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["existingSecret", "secretKey"],
+      "properties": {
+        "existingSecret": {"type": "string", "description": "Existing Secret containing the metrics bearer token; empty disables scraping."},
+        "secretKey": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"}
       }
     },
     "ssh": {

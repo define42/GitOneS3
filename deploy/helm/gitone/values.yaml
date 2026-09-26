@@ -36,6 +36,12 @@ git:
   maxQueuedOperations: 4
   queueTimeout: 5s
 
+# Opt in to /system/metrics with a separately provisioned bearer token.
+# The token must have at least 32 ASCII bytes. Empty existingSecret disables HTTP scrapes.
+metrics:
+  existingSecret: ""
+  secretKey: metrics-token
+
 ssh:
   enabled: false
   port: 2222

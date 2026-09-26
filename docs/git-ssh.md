@@ -99,16 +99,17 @@ operation is active and up to four wait for at most five seconds. The same
 `GITONE_GIT_QUEUE_TIMEOUT` settings apply to both transports; they do not create
 separate HTTP and SSH capacities. A full queue or timeout rejects the command,
 and cancellation/deadline expiration releases queued work. The wait does not
-extend the connection's total deadline. These are small
-repository limits, not an unrestricted large-repository hosting engine.
+extend the connection's total deadline. The shared bounds allow 1 GiB of
+reachable content and 16 MiB per object; see the full
+[transport limits](git-authentication.md#current-transport-limits).
 Public and peer connections share the connection bound; saturation can reject
 authority checks and Git operations until connections close. Deploy TCP-level
 connection/rate controls where needed; there is no per-user rate limiter yet.
 
 SSH ref advertisements avoid loading all repository objects, and incremental
 fetch excludes objects reachable from accepted client `have` commits. Actual
-transfers still load the full bounded Git snapshot. Measure peak container
-memory for overlapping operations before increasing active concurrency above
+transfers use bounded disk workspaces and read object bodies individually.
+Measure peak container memory for overlapping operations before increasing active concurrency above
 one; `GOMEMLIMIT` is a soft target, not a hard container limit. See the shared
 [admission settings and memory guidance](git-authentication.md#concurrency-and-memory).
 

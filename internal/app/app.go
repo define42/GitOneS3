@@ -17,6 +17,7 @@ import (
 	"github.com/define42/GitOneS3/internal/config"
 	"github.com/define42/GitOneS3/internal/gittransport"
 	"github.com/define42/GitOneS3/internal/httpserver"
+	"github.com/define42/GitOneS3/internal/metrics"
 	"github.com/define42/GitOneS3/internal/protocol"
 	"github.com/define42/GitOneS3/internal/proxy"
 	"github.com/define42/GitOneS3/internal/repository"
@@ -46,7 +47,11 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return nil, err
 	}
-	objectStore, parser, router := resources.store, resources.parser, resources.router
+	objectStore, err := metrics.NewStore(resources.store)
+	if err != nil {
+		return nil, fmt.Errorf("create storage metrics: %w", err)
+	}
+	parser, router := resources.parser, resources.router
 	if cfg.Auth.Enabled && cfg.SpaceDiscoveryMode != "scan" {
 		if err := auth.InitializeSpaceIndex(ctx, objectStore, router, shard.ShardID(cfg.LocalShard)); err != nil {
 			return nil, fmt.Errorf("initialize space discovery index: %w", err)
@@ -142,8 +147,8 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 
 	shardLogger := logger.With("shard_id", cfg.LocalShard)
 	publicHandler := httpserver.WithHealth(
-		httpserver.LogRequests(uiHandler, shardLogger),
-		objectStore,
+		httpserver.LogRequests(withMetrics(uiHandler, objectStore, cfg.MetricsToken), shardLogger),
+		resources.store,
 	)
 	server, err := httpserver.New(
 		listenAddress(cfg.ListenAddress, cfg.PublicPort),

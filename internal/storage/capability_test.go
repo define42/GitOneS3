@@ -42,6 +42,24 @@ func TestVerifyConditionalOperationsRejectsIgnoredConditions(t *testing.T) {
 	}
 }
 
+func TestVerifyConditionalOperationsRejectsIgnoredDeleteConditions(t *testing.T) {
+	t.Parallel()
+
+	store := &unconditionalDeleteStore{MemoryStore: NewMemoryStore()}
+	err := VerifyConditionalOperations(t.Context(), store, "maintenance/capabilities/")
+	if !errors.Is(err, ErrConditionalUnsupported) {
+		t.Fatalf("VerifyConditionalOperations() error = %v, want unsupported", err)
+	}
+}
+
+type unconditionalDeleteStore struct {
+	*MemoryStore
+}
+
+func (s *unconditionalDeleteStore) Delete(ctx context.Context, key string, _ Version) error {
+	return s.MemoryStore.Delete(ctx, key, "")
+}
+
 type unconditionalStore struct {
 	*MemoryStore
 }

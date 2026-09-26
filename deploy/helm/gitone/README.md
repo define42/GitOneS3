@@ -14,6 +14,18 @@ index refuse startup in this mode. Deploy the new image with
 `indexed` and replace pods again. Do not backfill while any older writer remains.
 See the [migration and rollback procedure](../../../docs/space-discovery.md).
 
+## Storage metrics
+
+Set `metrics.existingSecret` to an existing Secret with a `metrics-token` key
+(or set `metrics.secretKey`). The token must contain 32–1024 ASCII bearer-token
+bytes. The chart injects it as `GITONE_METRICS_TOKEN`; it does not create or
+store the token in values. With no Secret reference, metrics scraping is disabled.
+
+Scrape `/system/metrics` on each pod's normal HTTP port with that bearer token.
+Use each pod's headless-Service address so counters stay associated with one
+shard. See [storage metrics](../../../docs/storage-metrics.md) for Prometheus
+configuration, metric names, and alert examples.
+
 ## Google OIDC
 
 Enable authentication with:

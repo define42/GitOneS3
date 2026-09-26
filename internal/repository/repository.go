@@ -25,12 +25,13 @@ import (
 )
 
 const (
-	maxJSONBytes    = 1 << 20
-	maxObjectBytes  = 1 << 20
-	maxRepositories = 1000
-	maxObjects      = 10000
-	maxTreeEntries  = 1000
-	maxCommits      = 100
+	maxJSONBytes     = 1 << 20
+	maxManifestBytes = 64 << 20
+	maxObjectBytes   = 1 << 20
+	maxRepositories  = 1000
+	maxObjects       = 100000
+	maxTreeEntries   = 1000
+	maxCommits       = 100
 )
 
 var (
@@ -116,13 +117,17 @@ type refsSnapshot struct {
 }
 
 type objectInfo struct {
-	Type   string `json:"type"`
-	Size   int64  `json:"size"`
-	SHA256 string `json:"sha256"`
+	Type    string `json:"type"`
+	Size    int64  `json:"size"`
+	SHA256  string `json:"sha256"`
+	PackKey string `json:"packKey,omitempty"`
+	Offset  int64  `json:"offset,omitempty"`
+	Length  int64  `json:"length,omitempty"`
+	CRC32   uint32 `json:"crc32,omitempty"`
 }
 
-// The first generation uses standard loose Git objects. The manifest records
-// their strong digest as well as Git's SHA-1 identifier; no pack files exist yet.
+// Schema 1 stores loose objects. Schema 2 also indexes immutable canonical packs.
+// Strong object digests are independent of Git's SHA-1 identifiers.
 type objectManifest struct {
 	SchemaVersion int                   `json:"schemaVersion"`
 	ObjectFormat  string                `json:"objectFormat"`
@@ -314,16 +319,15 @@ func (s *Store) load(ctx context.Context, namespace, name string) (snapshot, err
 	if err := s.readSnapshot(ctx, m.ID, state.RefsSnapshot, &result.refs); err != nil {
 		return snapshot{}, err
 	}
-	if err := s.readSnapshot(ctx, m.ID, state.PackManifest, &result.manifest); err != nil {
+	if err := s.readManifest(ctx, m.ID, state.PackManifest, &result.manifest); err != nil {
 		return snapshot{}, err
 	}
 	if result.refs.SchemaVersion != 1 || result.refs.Refs == nil || len(result.refs.Refs) > maxObjects ||
-		result.manifest.SchemaVersion != 1 || result.manifest.ObjectFormat != "sha1" || result.manifest.Objects == nil || len(result.manifest.Objects) > maxObjects {
+		(result.manifest.SchemaVersion != 1 && result.manifest.SchemaVersion != 2) || result.manifest.ObjectFormat != "sha1" || result.manifest.Objects == nil || len(result.manifest.Objects) > maxObjects {
 		return snapshot{}, ErrCorrupt
 	}
 	for id, info := range result.manifest.Objects {
-		if !objectIDPattern.MatchString(id) || !digestPattern.MatchString(info.SHA256) || info.Size < 0 || info.Size > maxObjectBytes ||
-			(info.Type != "blob" && info.Type != "tree" && info.Type != "commit" && info.Type != "tag") {
+		if !validObjectInfo(id, info) || (result.manifest.SchemaVersion == 1 && info.PackKey != "") {
 			return snapshot{}, ErrCorrupt
 		}
 	}

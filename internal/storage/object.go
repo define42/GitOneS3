@@ -20,6 +20,9 @@ var (
 	// ErrConditionalUnsupported reports an object store that does not enforce
 	// the conditional operations required for repository publication.
 	ErrConditionalUnsupported = errors.New("conditional object operations are unsupported")
+	// ErrConsistencyUnsupported reports stale object listings observed by the
+	// startup capability probe. Strong read and listing consistency is required.
+	ErrConsistencyUnsupported = errors.New("strong object store consistency is unsupported")
 	// ErrInvalidRange reports an invalid or unsatisfiable byte range.
 	ErrInvalidRange = errors.New("invalid object range")
 )
@@ -55,8 +58,12 @@ type PutOptions struct {
 
 // ObjectStore is the shard-scoped durable object storage boundary.
 //
-// Implementations must apply PutOptions atomically with the write. A deployment
-// must reject S3-compatible providers that cannot honor those preconditions.
+// Implementations must apply PutOptions and conditional Delete atomically, and
+// provide strongly consistent reads and prefix listings after writes and deletes.
+// GC depends on complete listings of immutable state snapshots while writers are
+// fenced. Pagination need not provide a snapshot across concurrent mutations.
+// A deployment must reject S3-compatible providers without these guarantees;
+// capability probes detect violations but cannot prove a provider's guarantees.
 type ObjectStore interface {
 	Put(ctx context.Context, key string, body io.Reader, size int64, opts PutOptions) (ObjectInfo, error)
 	Get(ctx context.Context, key string) (io.ReadCloser, ObjectInfo, error)

@@ -3,7 +3,6 @@
 package gittransport
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -108,12 +108,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	var snapshot *repository.GitSnapshot
-	if advertise {
-		snapshot, err = h.store.ReadGitReferences(ctx, namespace, name)
-	} else {
-		snapshot, err = h.store.ReadGit(ctx, namespace, name)
-	}
+	snapshot, err := h.store.ReadGitReferences(ctx, namespace, name)
 	if err != nil {
 		status := http.StatusServiceUnavailable
 		if errors.Is(err, repository.ErrNotFound) {
@@ -130,25 +125,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeBytes(w, advertisement(snapshot, service))
 		return
 	}
-	bodyLimit := int64(maxPackBytes)
 	if service == upload {
-		bodyLimit = maxNegotiationBytes
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, bodyLimit+1))
-	if err != nil {
-		http.Error(w, "cannot read git request", http.StatusBadRequest)
+		body, readErr := io.ReadAll(io.LimitReader(r.Body, maxNegotiationBytes+1))
+		if readErr != nil || len(body) > maxNegotiationBytes {
+			http.Error(w, "invalid negotiation", http.StatusBadRequest)
+			return
+		}
+		file, prepareErr := h.prepareUpload(ctx, snapshot, body)
+		if prepareErr != nil {
+			http.Error(w, "invalid or unavailable Git objects", http.StatusBadRequest)
+			return
+		}
+		defer func() {
+			// #nosec G703 -- prepareUpload creates this file with os.CreateTemp; its name is never supplied by the request.
+			if err := errors.Join(file.Close(), os.Remove(file.Name())); err != nil {
+				slog.WarnContext(ctx, "remove fetch workspace", "error", err)
+			}
+		}()
+		w.Header().Set("Content-Type", "application/x-"+service+"-result")
+		if _, err := io.Copy(w, file); err != nil {
+			return
+		}
 		return
 	}
-	if int64(len(body)) > bodyLimit {
-		http.Error(w, "git request exceeds limit", http.StatusRequestEntityTooLarge)
-		return
-	}
-	var result []byte
-	if service == upload {
-		result, err = h.upload(ctx, snapshot, body)
-	} else {
-		result, err = h.receive(ctx, snapshot, body)
-	}
+	result, err := h.receiveStream(ctx, snapshot, r.Body, false)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, repository.ErrLimit) {
@@ -279,41 +279,6 @@ func referenceAdvertisement(snap *repository.GitSnapshot, service string) []byte
 	}
 	out.WriteString("0000")
 	return []byte(out.String())
-}
-
-func (h *Handler) receive(ctx context.Context, snap *repository.GitSnapshot, body []byte) ([]byte, error) {
-	r := bytes.NewReader(body)
-	updates, err := receiveCommands(r)
-	if err != nil {
-		return nil, err
-	}
-	incoming := map[string]repository.GitObject{}
-	if r.Len() > 0 {
-		incoming, err = decodePack(ctx, body[len(body)-r.Len():], snap.Objects)
-		if err != nil {
-			//lint:ignore nilerr Git reports unpack failures in report-status, not as an HTTP transport error.
-			return receiveStatus(updates, "invalid pack", "unpack failed"), nil
-		}
-	}
-	authorize, _ := ctx.Value(writeAuthorizationKey{}).(func(context.Context) error)
-	err = h.store.PublishGit(ctx, snap, updates, incoming, authorize)
-	if err != nil {
-		reason := "repository update failed"
-		if errors.Is(err, repository.ErrConflict) {
-			reason = "stale reference; fetch and retry"
-		}
-		if errors.Is(err, repository.ErrForbidden) {
-			reason = "write permission revoked or expired"
-		}
-		if errors.Is(err, repository.ErrInvalid) {
-			reason = "invalid reference or missing object"
-		}
-		if errors.Is(err, repository.ErrLimit) {
-			reason = "repository exceeds limits"
-		}
-		return receiveStatus(updates, "ok", reason), nil
-	}
-	return receiveStatus(updates, "ok", ""), nil
 }
 
 func receiveCommands(r io.Reader) ([]repository.RefUpdate, error) {

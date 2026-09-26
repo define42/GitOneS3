@@ -13,8 +13,11 @@ import (
 )
 
 // VerifyConditionalOperations exercises the atomic preconditions GitOne uses
-// to publish repository state. The probe creates and removes one unique object
-// beneath prefix and leaves no object behind when cleanup succeeds.
+// to publish repository state, fence writers, and collect orphan artifacts.
+// It also checks one object's immediate listing visibility after create, update,
+// and deletion. These observations cannot prove provider consistency guarantees.
+// The probe creates and removes one unique object beneath prefix and leaves no
+// object behind when cleanup succeeds.
 func VerifyConditionalOperations(
 	ctx context.Context,
 	store ObjectStore,
@@ -65,6 +68,9 @@ func VerifyConditionalOperations(
 			"verify conditional operations: create returned no version: %w",
 			ErrConditionalUnsupported,
 		)
+	}
+	if err := verifyProbeListing(ctx, store, key, &first); err != nil {
+		return err
 	}
 
 	duplicate := []byte("gitone-duplicate-must-not-win")
@@ -129,6 +135,9 @@ func VerifyConditionalOperations(
 	if err := verifyObject(ctx, store, key, updated, second.Version); err != nil {
 		return err
 	}
+	if err := verifyProbeListing(ctx, store, key, &second); err != nil {
+		return err
+	}
 
 	stale := []byte("gitone-stale-version-must-not-win")
 	_, err = store.Put(
@@ -151,7 +160,21 @@ func VerifyConditionalOperations(
 		return err
 	}
 
-	if err := store.Delete(ctx, key, ""); err != nil {
+	for _, version := range []Version{"gitone-invalid-version", first.Version} {
+		if err := store.Delete(ctx, key, version); err == nil {
+			return fmt.Errorf(
+				"verify conditional operations: wrong If-Match delete succeeded: %w",
+				ErrConditionalUnsupported,
+			)
+		} else if !errors.Is(err, ErrPreconditionFailed) {
+			return fmt.Errorf("verify conditional operations: wrong-version delete: %w", err)
+		}
+		if err := verifyObject(ctx, store, key, updated, second.Version); err != nil {
+			return err
+		}
+	}
+
+	if err := store.Delete(ctx, key, second.Version); err != nil {
 		return fmt.Errorf("verify conditional operations: delete probe: %w", err)
 	}
 	if _, err := store.Head(ctx, key); err == nil {
@@ -161,6 +184,9 @@ func VerifyConditionalOperations(
 		)
 	} else if !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("verify conditional operations: verify probe deletion: %w", err)
+	}
+	if err := verifyProbeListing(ctx, store, key, nil); err != nil {
+		return err
 	}
 	created = false
 	return nil
@@ -177,7 +203,7 @@ func verifyObject(
 	if err != nil {
 		return fmt.Errorf("verify conditional operations: read probe: %w", err)
 	}
-	data, readErr := io.ReadAll(body)
+	data, readErr := io.ReadAll(io.LimitReader(body, int64(len(expected))+1))
 	closeErr := body.Close()
 	if err := errors.Join(readErr, closeErr); err != nil {
 		return fmt.Errorf("verify conditional operations: read probe body: %w", err)
@@ -187,6 +213,29 @@ func verifyObject(
 			"verify conditional operations: conditional write changed probe: %w",
 			ErrConditionalUnsupported,
 		)
+	}
+	return nil
+}
+
+func verifyProbeListing(ctx context.Context, store ObjectStore, key string, expected *ObjectInfo) error {
+	// The random full key is also its own prefix, isolating this one-object
+	// probe from other instances checking the same shard at startup.
+	page, err := store.ListPage(ctx, key, "", 1)
+	if err != nil {
+		return fmt.Errorf("verify storage listing consistency: %w", err)
+	}
+	if expected == nil {
+		if len(page.Objects) == 0 && page.NextAfter == "" {
+			return nil
+		}
+		return fmt.Errorf("listing retained deleted probe: %w", ErrConsistencyUnsupported)
+	}
+	if len(page.Objects) != 1 || page.NextAfter != "" {
+		return fmt.Errorf("listing omitted or duplicated written probe: %w", ErrConsistencyUnsupported)
+	}
+	got := page.Objects[0]
+	if got.Key != key || got.Size != expected.Size || got.Version != expected.Version {
+		return fmt.Errorf("listing returned stale probe metadata: %w", ErrConsistencyUnsupported)
 	}
 	return nil
 }

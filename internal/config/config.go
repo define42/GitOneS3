@@ -58,6 +58,7 @@ type Config struct {
 	Namespace           string
 	ClusterIdentityFile string
 	SpaceDiscoveryMode  string
+	MetricsToken        string
 	S3                  S3
 	Pack                PackPolicy
 	Path                PathPolicy
@@ -209,6 +210,7 @@ func Load(lookup LookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	metricsToken, _ := lookup("GITONE_METRICS_TOKEN")
 	cfg := Config{
 		Auth:                auth,
 		SSH:                 ssh,
@@ -222,6 +224,7 @@ func Load(lookup LookupEnv) (Config, error) {
 		Namespace:           requiredValue(lookup, "POD_NAMESPACE"),
 		ClusterIdentityFile: value(lookup, "GITONE_CLUSTER_IDENTITY_FILE", DefaultClusterIdentityFile),
 		SpaceDiscoveryMode:  value(lookup, "GITONE_SPACE_DISCOVERY_MODE", DefaultSpaceDiscoveryMode),
+		MetricsToken:        metricsToken,
 		S3: S3{
 			Endpoint:     value(lookup, "GITONE_S3_ENDPOINT", ""),
 			Region:       value(lookup, "GITONE_S3_REGION", DefaultS3Region),
@@ -275,6 +278,9 @@ func loadGit(lookup LookupEnv) (Git, error) {
 
 // Validate checks invariants that must hold before the process accepts traffic.
 func (c Config) Validate() error {
+	if err := validateMetricsToken(c.MetricsToken); err != nil {
+		return err
+	}
 	if c.Git.MaxConcurrentOperations < 0 || c.Git.MaxConcurrentOperations > 32 {
 		return fmt.Errorf("config: git maximum concurrent operations must be between 1 and 32 (zero selects the default)")
 	}

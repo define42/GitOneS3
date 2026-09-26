@@ -171,11 +171,12 @@ repository, Git subprocess, server hook, or local Git config is authoritative.
 
 | Limit | Current bound |
 | --- | --- |
-| Single decoded Git object | 1 MiB |
-| Complete reachable repository content | 64 MiB and 10,000 objects |
-| Serialized object manifest | 1 MiB; can constrain object count below 10,000 |
+| Single decoded Git object | 16 MiB (browser previews remain 1 MiB) |
+| Complete reachable repository content | 1 GiB and 100,000 objects |
+| Serialized object manifest | 64 MiB; graph metadata is bounded separately from payloads |
 | Published refs / updates per push | 1,000 each |
-| Push request body / pack input | 72 MiB |
+| Pack input/output | 1 GiB + 8 MiB; push commands additionally bounded to 1 MiB |
+| Incoming workspace file contents | 2 GiB; decoded bodies and delta instructions also share a 1 GiB budget |
 | Upload-pack negotiation input (HTTP and SSH) | 1 MiB |
 | Pack delta depth | 64 |
 | Git request deadline | 90 seconds |
@@ -183,18 +184,46 @@ repository, Git subprocess, server hook, or local Git config is authoritative.
 | Waiting Git operations per shard process | 4 by default; configurable from 0 to 1,024 |
 | Admission queue timeout | 5 seconds by default; positive duration up to 90 seconds |
 
-These are small-repository limits, not a production large-repository engine.
-Pack inflation is also bounded; a highly compressed pack does not bypass
-decoded-object limits. Ref advertisements use a lightweight refs read instead
-of loading all Git objects. Incremental fetch respects accepted client `have`
-commits and excludes their reachable objects from the outgoing pack. Actual
-fetch/push processing still uses `ReadGit` to load the full bounded repository
-snapshot; reduced transfer size is not a bounded-memory streaming engine.
-Ordinary Git clients can negotiate the supported protocol without special flags.
-Tree entries are limited to 1,000 per directory, refs to 128-byte branch/tag
-names, and commit/tag text to UTF-8; commit author/committer names are bounded
-to 254 bytes. Unpublished objects from rejected or competing pushes can remain
-in S3; automatic garbage collection is not implemented.
+HTTP and SSH use the same disk-backed pack decoder and canonical pack writer.
+Incoming OFS/REF deltas, including thin-pack bases, are validated within byte,
+object-count, depth, and disk budgets. Uploaded objects become immutable standard
+Git packs with per-object offsets, CRC32, Git SHA-1, and SHA-256 in schema-2
+manifests. Canonical packs contain independent zlib entries; stored delta chains
+are not required for reads. Existing schema-1 loose objects remain readable.
+
+Advertisements read bounded refs and manifest metadata. Fetch validates graph
+connectivity, subtracts the client's common history, and encodes objects one at a
+time. HTTP responses are staged in temporary files before response headers are
+sent; SSH streams the encoded response. Object bodies and request/response packs
+are processed without buffering the complete repository in memory. The small-repository `ReadGit` helper remains capped
+at 64 MiB and is not used by network transfers.
+
+Git pack caches, incoming workspaces, and outgoing pack files are disposable
+local workspace. S3 remains authoritative. Set `TMPDIR` to writable storage;
+Helm sets it to `/var/lib/gitone/work`. Allow approximately 4.1 GiB of temporary
+file contents per active push plus filesystem overhead. Cancellation and normal
+completion remove workspace files. After a process crash, remove leftover
+`gitone-*` files/directories only while all users of that workspace are stopped.
+Do not use a memory-backed workspace for large repositories.
+
+Tree entries remain limited to 1,000 per directory, refs to 128-byte branch/tag
+names, and commit/tag text to UTF-8. Commit author/committer names are bounded to
+254 bytes. Concurrent writers use a durable repository lock plus the generation
+CAS. A conflicting writer is rejected for retry. A crashed holder leaves a lock
+requiring explicit operator recovery; reads remain available.
+
+Rejected pushes may leave immutable artifacts. The [maintenance command](repository-maintenance.md)
+collects old unreferenced artifacts with conditional deletes, retaining all
+recoverable generations and validating them before deletion. It also checks
+integrity, restores a chosen snapshot as a new generation, and repacks repositories.
+
+Stop traffic and replace all older readers and writers before accepting pushes
+with this release. Older binaries cannot read schema-2 pack manifests, so a
+mixed-version rollout cannot serve newly published repositories. All writers
+must also honor the durable lock before maintenance can run safely. Rollback
+after the first packed push requires a compatible binary or restoring the
+pre-upgrade storage backup. See the [upgrade instructions](repository-maintenance.md#prepare-the-deployment).
+
 Shallow/partial clones, Git protocol v2, SHA-256 repositories, LFS, server hooks,
 and branch-protection policy are not implemented. LFS routes return `501`.
 Browser file editing and repository rename/delete operations remain unavailable.
@@ -226,8 +255,9 @@ not make conflicting updates both succeed.
 Before raising active concurrency, test overlapping clone/fetch/push operations
 on your largest supported repositories inside the intended container limit.
 Measure peak container memory, including the process baseline, repository
-snapshots, pack decoding/encoding, and non-Go memory, and leave operational
-headroom. A 64 MiB repository limit is not a 64 MiB memory-per-operation limit.
+manifest/graph metadata, per-object decoding/encoding, and non-Go memory. Include
+filesystem page cache and leave operational headroom. The repository byte limit
+is not a memory-per-operation guarantee.
 Queued connections also consume resources. `GOMEMLIMIT` is a soft Go runtime
 memory target; it cannot enforce a hard process/container memory ceiling or
 prevent an OOM kill. Keep the default of one until workload-specific measurements

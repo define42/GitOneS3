@@ -13,14 +13,13 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/define42/GitOneS3/internal/storage"
 )
 
 // These bounds apply to the complete reachable repository, not just one push.
-const MaxGitBytes = 64 << 20
-const MaxGitObjectBytes = maxObjectBytes
+const MaxGitBytes = 1 << 30
+const MaxGitObjectBytes = 16 << 20
 const MaxGitObjects = maxObjects
+const MaxPackBytes = MaxGitBytes + (8 << 20)
 
 var ErrConflict = errors.New("repository: concurrent reference update")
 var ErrForbidden = errors.New("repository: write authorization required")
@@ -38,6 +37,7 @@ type GitSnapshot struct {
 	References    map[string]string
 	Objects       map[string]GitObject
 	original      snapshot
+	available     map[string]objectInfo
 }
 
 type RefUpdate struct{ Name, Old, New string }
@@ -74,7 +74,11 @@ func (s *Store) existingSnapshot(ctx context.Context, id, kind string, value any
 	}
 	digest := sha256.Sum256(data)
 	relative := "states/00000000000000000001-" + kind + "-" + hex.EncodeToString(digest[:]) + ".json"
-	actual, err := s.read(ctx, "repos/"+id+"/"+relative, maxJSONBytes)
+	limit := maxJSONBytes
+	if kind == "manifest" {
+		limit = maxManifestBytes
+	}
+	actual, err := s.read(ctx, "repos/"+id+"/"+relative, int64(limit))
 	if err != nil {
 		return "", err
 	}
@@ -113,6 +117,15 @@ func (s *Store) LoadGitObjects(ctx context.Context, base *GitSnapshot) (*GitSnap
 		return nil, ErrInvalid
 	}
 	snap := base.original
+	// Compatibility helper for small in-process callers. Network transfers use
+	// OpenGit and never materialize the complete repository.
+	var total int64
+	for _, info := range snap.manifest.Objects {
+		total += info.Size
+		if total > 64<<20 {
+			return nil, ErrLimit
+		}
+	}
 	result := &GitSnapshot{DefaultBranch: snap.metadata.DefaultBranch, References: maps.Clone(snap.refs.Refs), Objects: map[string]GitObject{}, original: snap}
 	for id, info := range snap.manifest.Objects {
 		data, err := s.object(ctx, snap, id, info.Type)
@@ -143,110 +156,21 @@ func (s *Store) ReadGit(ctx context.Context, namespace, name string) (*GitSnapsh
 // PublishGit durably stores the complete next generation, rechecks the caller's
 // current token and membership, then atomically publishes all reference changes.
 func (s *Store) PublishGit(ctx context.Context, base *GitSnapshot, updates []RefUpdate, incoming map[string]GitObject, authorize func(context.Context) error) error {
-	if authorize == nil {
-		return ErrForbidden
-	}
-	if base == nil || !idPattern.MatchString(base.original.metadata.ID) || len(updates) == 0 || len(updates) > 1000 {
-		return ErrInvalid
-	}
-	refs := maps.Clone(base.original.refs.Refs)
-	seen := map[string]bool{}
-	for _, update := range updates {
-		if !ValidRef(update.Name) || seen[update.Name] || (update.Old != "" && !objectIDPattern.MatchString(update.Old)) || (update.New != "" && !objectIDPattern.MatchString(update.New)) || update.Old == update.New {
-			return ErrInvalid
-		}
-		seen[update.Name] = true
-		if refs[update.Name] != update.Old {
-			return ErrConflict
-		}
-		if update.New == "" {
-			delete(refs, update.Name)
-		} else {
-			refs[update.Name] = update.New
-		}
-	}
-	if len(refs) > 1000 {
-		return ErrLimit
-	}
-	for ref := range refs {
-		parts := strings.Split(ref, "/")
-		for i := 2; i < len(parts); i++ {
-			if _, ok := refs[strings.Join(parts[:i], "/")]; ok {
-				return ErrInvalid
-			}
-		}
-	}
-	objects := maps.Clone(base.Objects)
-	if len(objects)+len(incoming) > MaxGitObjects*2 {
-		return ErrLimit
-	}
+	infos := make(map[string]objectInfo, len(incoming))
 	for id, object := range incoming {
 		if len(object.Data) > MaxGitObjectBytes || GitObjectID(object) != id {
 			return ErrInvalid
 		}
-		if prior, ok := objects[id]; ok && (prior.Type != object.Type || !bytes.Equal(prior.Data, object.Data)) {
-			return ErrCorrupt
+		infos[id] = gitObjectInfo(object)
+	}
+	get := func(_ context.Context, id string) (GitObject, error) {
+		object, ok := incoming[id]
+		if !ok {
+			return GitObject{}, ErrNotFound
 		}
-		objects[id] = object
+		return object, nil
 	}
-	reachable, err := ReachableGit(ctx, refs, objects)
-	if err != nil {
-		return err
-	}
-	manifest := objectManifest{SchemaVersion: 1, ObjectFormat: "sha1", Objects: map[string]objectInfo{}}
-	for id, object := range reachable {
-		if info, ok := base.original.manifest.Objects[id]; ok {
-			manifest.Objects[id] = info
-			continue
-		}
-		storedID, err := s.putObject(ctx, base.original.metadata.ID, object.Type, object.Data, &manifest)
-		if errors.Is(err, storage.ErrAlreadyExists) {
-			// A competing writer may have uploaded identical immutable content.
-			// Never trust its SHA-1 name alone: read and compare the strong digest.
-			check := base.original
-			check.manifest = objectManifest{Objects: map[string]objectInfo{id: gitObjectInfo(object)}}
-			data, verifyErr := s.object(ctx, check, id, object.Type)
-			if verifyErr != nil || !bytes.Equal(data, object.Data) {
-				return ErrCorrupt
-			}
-			manifest.Objects[id] = gitObjectInfo(object)
-		} else if err != nil {
-			return err
-		} else if storedID != id {
-			return ErrCorrupt
-		}
-	}
-	refsKey, err := s.putSnapshot(ctx, base.original.metadata.ID, "refs", refsSnapshot{SchemaVersion: 1, Refs: refs})
-	if errors.Is(err, storage.ErrAlreadyExists) {
-		refsKey, err = s.existingSnapshot(ctx, base.original.metadata.ID, "refs", refsSnapshot{SchemaVersion: 1, Refs: refs})
-	}
-	if err != nil {
-		return err
-	}
-	manifestKey, err := s.putSnapshot(ctx, base.original.metadata.ID, "manifest", manifest)
-	if errors.Is(err, storage.ErrAlreadyExists) {
-		manifestKey, err = s.existingSnapshot(ctx, base.original.metadata.ID, "manifest", manifest)
-	}
-	if err != nil {
-		return err
-	}
-	next := base.original.state
-	next.Generation++
-	next.RefsSnapshot, next.PackManifest = refsKey, manifestKey
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := authorize(ctx); err != nil {
-		// The caller must classify any failed recheck as forbidden, not its cause.
-		return fmt.Errorf("%w: %s", ErrForbidden, err.Error())
-	}
-	if err := s.repositories.CompareAndSwapState(ctx, base.original.metadata.ID, base.original.version, next); err != nil {
-		if errors.Is(err, storage.ErrPreconditionFailed) || errors.Is(err, storage.ErrConditionalConflict) {
-			return ErrConflict
-		}
-		return err
-	}
-	return nil
+	return s.publishObjects(ctx, base, updates, infos, get, false, authorize)
 }
 
 // ReachableGit validates object graph connectivity and returns only reachable

@@ -1,10 +1,7 @@
 package gittransport
 
 import (
-	"bytes"
-	"compress/zlib"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -62,7 +59,7 @@ func (h *Handler) ServeSSH(ctx context.Context, request SSHRequest) error {
 	return h.receiveSSH(ctx, snapshot, request.Stream)
 }
 
-func (h *Handler) uploadSSH(ctx context.Context, snapshot *repository.GitSnapshot, stream io.ReadWriter) error {
+func (h *Handler) uploadSSH(ctx context.Context, snapshot *repository.GitSnapshot, stream io.ReadWriter) (err error) {
 	reader := &io.LimitedReader{R: stream, N: maxNegotiationBytes}
 	n := newUploadNegotiation(snapshot)
 	for {
@@ -83,11 +80,13 @@ func (h *Handler) uploadSSH(ctx context.Context, snapshot *repository.GitSnapsho
 	if len(n.wants) == 0 {
 		return nil // No requested objects, including an up-to-date fetch.
 	}
-	// Advertisement and want validation require only references. Load the same
-	// pinned generation only when this session actually requests objects.
-	snapshot, err := h.store.LoadGitObjects(ctx, snapshot)
+	objectReader, err := h.store.OpenGit(ctx, snapshot)
 	if err != nil {
-		return fmt.Errorf("load ssh fetch objects: %w", err)
+		return err
+	}
+	defer func() { err = errors.Join(err, objectReader.Close()) }()
+	if err := objectReader.Validate(ctx); err != nil {
+		return err
 	}
 	for {
 		line, flush, err := n.readPacket(ctx, reader)
@@ -120,173 +119,16 @@ func (h *Handler) uploadSSH(ctx context.Context, snapshot *repository.GitSnapsho
 				return err
 			}
 		}
-		result, err := n.pack(ctx, snapshot)
-		if err != nil {
-			return fmt.Errorf("prepare ssh fetch: %w", err)
-		}
-		return writeSSH(stream, result)
+		return n.writePack(ctx, snapshot, objectReader, stream)
 	}
 }
 
 func (h *Handler) receiveSSH(ctx context.Context, snapshot *repository.GitSnapshot, stream io.ReadWriter) error {
-	reader := &packCapture{reader: stream}
-	for count := 0; ; count++ {
-		_, flush, err := readPkt(reader)
-		if err != nil {
-			return fmt.Errorf("read ssh reference updates: %w", err)
-		}
-		if flush {
-			if count == 0 {
-				return nil // Nothing to push.
-			}
-			break
-		}
-		if count >= 1000 || reader.data.Len() > maxNegotiationBytes {
-			return repository.ErrLimit
-		}
-	}
-	updates, err := receiveCommands(bytes.NewReader(reader.data.Bytes()))
+	result, err := h.receiveStream(ctx, snapshot, stream, true)
 	if err != nil {
-		return fmt.Errorf("validate ssh reference updates: %w", err)
-	}
-	snapshot, err = h.store.LoadGitObjects(ctx, snapshot)
-	if err != nil {
-		return fmt.Errorf("load git ssh objects: %w", err)
-	}
-	for _, update := range updates {
-		if update.New == "" {
-			continue
-		}
-		// A create/update always carries a pack, even if its object count is
-		// zero. Delete-only pushes have no pack and must not wait for EOF.
-		if err := readStreamPack(ctx, reader); err != nil {
-			return fmt.Errorf("read ssh pack: %w", err)
-		}
-		break
-	}
-	result, err := h.receive(ctx, snapshot, reader.data.Bytes())
-	if err != nil {
-		return fmt.Errorf("apply ssh push: %w", err)
+		return err
 	}
 	return writeSSH(stream, result)
-}
-
-// packCapture implements io.ByteReader so zlib never reads past an object's
-// compressed stream. Capturing only consumed bytes makes a PACK self-delimiting:
-// the peer can keep stdin open while waiting for receive-pack's report-status.
-type packCapture struct {
-	reader io.Reader
-	data   bytes.Buffer
-}
-
-func (r *packCapture) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	remaining := maxPackBytes - r.data.Len()
-	if remaining <= 0 {
-		return 0, repository.ErrLimit
-	}
-	n, err := r.reader.Read(p[:min(len(p), remaining)])
-	r.data.Write(p[:n])
-	return n, err
-}
-
-func (r *packCapture) ReadByte() (byte, error) {
-	var data [1]byte
-	_, err := io.ReadFull(r, data[:])
-	return data[0], err
-}
-
-// readStreamPack bounds all advertised/decompressed sizes while locating the
-// checksum. decodePack subsequently verifies checksums, deltas and object IDs.
-func readStreamPack(ctx context.Context, reader *packCapture) error {
-	var header [12]byte
-	if _, err := io.ReadFull(reader, header[:]); err != nil {
-		return fmt.Errorf("read pack header: %w", err)
-	}
-	version := binary.BigEndian.Uint32(header[4:8])
-	count := binary.BigEndian.Uint32(header[8:12])
-	if string(header[:4]) != "PACK" || (version != 2 && version != 3) {
-		return errPack
-	}
-	if count > repository.MaxGitObjects {
-		return repository.ErrLimit
-	}
-	var total int64
-	for range count {
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("read pack object: %w", err)
-		}
-		size, err := streamObjectHeader(reader)
-		if err != nil {
-			return err
-		}
-		total += size
-		if total > repository.MaxGitBytes {
-			return repository.ErrLimit
-		}
-		compressed, err := zlib.NewReader(reader)
-		if err != nil {
-			return fmt.Errorf("open compressed object: %w", err)
-		}
-		n, readErr := io.Copy(io.Discard, io.LimitReader(compressed, size+1))
-		closeErr := compressed.Close()
-		if readErr != nil || closeErr != nil || n != size {
-			return errors.Join(errPack, readErr, closeErr)
-		}
-	}
-	var checksum [20]byte
-	if _, err := io.ReadFull(reader, checksum[:]); err != nil {
-		return fmt.Errorf("read pack checksum: %w", err)
-	}
-	return nil
-}
-
-func streamObjectHeader(reader *packCapture) (int64, error) {
-	first, err := reader.ReadByte()
-	if err != nil {
-		return 0, fmt.Errorf("read object header: %w", err)
-	}
-	size := uint64(first & 15)
-	last := first
-	for shift := uint(4); last&128 != 0; shift += 7 {
-		if shift > 25 {
-			return 0, errPack
-		}
-		last, err = reader.ReadByte()
-		if err != nil {
-			return 0, fmt.Errorf("read object size: %w", err)
-		}
-		size |= uint64(last&127) << shift
-	}
-	if size > repository.MaxGitObjectBytes {
-		return 0, repository.ErrLimit
-	}
-	switch (first >> 4) & 7 {
-	case 1, 2, 3, 4:
-	case 6:
-		for n := 0; ; n++ {
-			if n > 8 {
-				return 0, errPack
-			}
-			b, err := reader.ReadByte()
-			if err != nil {
-				return 0, fmt.Errorf("read delta offset: %w", err)
-			}
-			if b&128 == 0 {
-				break
-			}
-		}
-	case 7:
-		var base [20]byte
-		if _, err := io.ReadFull(reader, base[:]); err != nil {
-			return 0, fmt.Errorf("read delta base: %w", err)
-		}
-	default:
-		return 0, errPack
-	}
-	return int64(size), nil // #nosec G115 -- The advertised size is bounded to MaxGitObjectBytes above.
 }
 
 func writeSSH(stream io.Writer, data []byte) error {

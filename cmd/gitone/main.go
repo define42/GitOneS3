@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,8 @@ import (
 )
 
 var version = "dev"
+
+var errUsage = errors.New("invalid command")
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -28,11 +31,11 @@ func main() {
 		os.Stdout,
 	); err != nil {
 		logger.Error("gitone stopped", "error", err)
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 
-const usage = `Usage: gitone [serve | backfill-space-index]
+const usage = `Usage: gitone [serve | backfill-space-index | repository <operation>]
 
 With no command, serve HTTP and optional SSH using environment configuration.
 
@@ -45,6 +48,9 @@ Routing and storage use the normal environment, mounted cluster identity, and
 AWS credentials. Required: GITONE_SHARD_COUNT, POD_NAME, and POD_NAMESPACE.
 GITONE_SPACE_DISCOVERY_MODE is scan or indexed (default indexed).
 See docs/space-discovery.md for the rollout and rollback procedure.
+
+repository runs integrity checks, generation restore, orphan collection, repack,
+and lock recovery on the configured shard. Use gitone repository --help.
 `
 
 func run(
@@ -54,8 +60,11 @@ func run(
 	lookup config.LookupEnv,
 	output io.Writer,
 ) error {
+	if len(args) > 0 && args[0] == "repository" {
+		return runRepositoryCommand(ctx, args[1:], lookup, output)
+	}
 	if len(args) > 1 {
-		return fmt.Errorf("invalid command; use gitone --help")
+		return fmt.Errorf("%w; use gitone --help", errUsage)
 	}
 	command := "serve"
 	if len(args) == 1 {
@@ -67,7 +76,7 @@ func run(
 		return err
 	case "serve", "backfill-space-index":
 	default:
-		return fmt.Errorf("invalid command; use gitone --help")
+		return fmt.Errorf("%w; use gitone --help", errUsage)
 	}
 	cfg, err := config.Load(lookup)
 	if err != nil {
@@ -98,4 +107,14 @@ func run(
 		"space_discovery_mode", cfg.SpaceDiscoveryMode,
 	)
 	return application.Run(ctx)
+}
+
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	if errors.Is(err, errUsage) {
+		return 2
+	}
+	return 1
 }

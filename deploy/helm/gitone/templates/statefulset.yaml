@@ -72,6 +72,13 @@ spec:
               protocol: TCP
             {{- end }}
           env:
+            {{- if .Values.metrics.existingSecret }}
+            - name: GITONE_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.metrics.existingSecret | quote }}
+                  key: {{ .Values.metrics.secretKey | quote }}
+            {{- end }}
             - name: GITONE_GIT_MAX_CONCURRENT_OPERATIONS
               value: {{ .Values.git.maxConcurrentOperations | quote }}
             - name: GITONE_GIT_MAX_QUEUED_OPERATIONS

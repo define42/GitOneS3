@@ -17,6 +17,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/define42/GitOneS3/internal/gitpack"
 )
 
 func (s *Store) initializeReadme(ctx context.Context, metadata Metadata, input CreateInput, manifest *objectManifest) (string, error) {
@@ -69,7 +71,11 @@ func (s *Store) putSnapshot(ctx context.Context, repositoryID, kind string, valu
 	if err != nil {
 		return "", fmt.Errorf("encode %s snapshot: %w", kind, err)
 	}
-	if len(data) > maxJSONBytes {
+	limit := maxJSONBytes
+	if kind == "manifest" {
+		limit = maxManifestBytes
+	}
+	if len(data) > limit {
 		return "", ErrLimit
 	}
 	digest := sha256.Sum256(data)
@@ -81,7 +87,15 @@ func (s *Store) putSnapshot(ctx context.Context, repositoryID, kind string, valu
 }
 
 func (s *Store) readSnapshot(ctx context.Context, repositoryID, relative string, target any) error {
-	data, err := s.read(ctx, "repos/"+repositoryID+"/"+relative, maxJSONBytes)
+	return s.readSnapshotLimit(ctx, repositoryID, relative, target, maxJSONBytes)
+}
+
+func (s *Store) readManifest(ctx context.Context, repositoryID, relative string, target *objectManifest) error {
+	return s.readSnapshotLimit(ctx, repositoryID, relative, target, maxManifestBytes)
+}
+
+func (s *Store) readSnapshotLimit(ctx context.Context, repositoryID, relative string, target any, limit int64) error {
+	data, err := s.read(ctx, "repos/"+repositoryID+"/"+relative, limit)
 	if err != nil {
 		return fmt.Errorf("read repository snapshot: %w", errors.Join(ErrCorrupt, err))
 	}
@@ -100,6 +114,20 @@ func (s *Store) object(ctx context.Context, snap snapshot, id, kind string) ([]b
 	info, ok := snap.manifest.Objects[id]
 	if !ok || !objectIDPattern.MatchString(id) || info.Type != kind {
 		return nil, ErrCorrupt
+	}
+	if info.PackKey != "" {
+		if !validObjectInfo(id, info) {
+			return nil, ErrCorrupt
+		}
+		body, _, err := s.objects.GetRange(ctx, "repos/"+snap.metadata.ID+"/"+info.PackKey, info.Offset, info.Length)
+		if err != nil {
+			return nil, errors.Join(ErrCorrupt, err)
+		}
+		object, readErr := gitpack.DecodeEntry(ctx, body, packEntry(id, info), MaxGitObjectBytes)
+		if err := errors.Join(readErr, body.Close()); err != nil {
+			return nil, errors.Join(ErrCorrupt, err)
+		}
+		return object.Data, nil
 	}
 	compressed, err := s.read(ctx, objectKey(snap.metadata.ID, id), maxObjectBytes+4096)
 	if err != nil {
@@ -323,6 +351,9 @@ func (s *Store) Blob(ctx context.Context, namespace, name, ref, path string) (Bl
 	}
 	if entry.kind != "blob" {
 		return Blob{}, ErrNotFound
+	}
+	if snap.manifest.Objects[entry.id].Size > maxObjectBytes {
+		return Blob{}, ErrLimit
 	}
 	content, err := s.object(ctx, snap, entry.id, "blob")
 	if err != nil {
