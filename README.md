@@ -182,7 +182,9 @@ time; metadata remains bounded in memory. Allow approximately 4.1 GiB of tempora
 file contents per active push (plus filesystem overhead), and measure container
 memory, including page cache. Set `TMPDIR` to a writable workspace; Helm already does. `GOMEMLIMIT` is a soft Go runtime target, not a
 hard container-memory guarantee. See [Git admission and limits](docs/git-authentication.md#concurrency-and-memory)
-and [performance measurements](docs/git-performance.md).
+and [performance measurements](docs/git-performance.md). Use the
+[deployment qualification procedure](docs/production-qualification.md) to check
+S3 load, capacity limits, recovery, and backups before rollout.
 
 HTTP request bodies have a 30-second read deadline, including bodies on health,
 authentication, and rejected requests. Git handlers use their existing 90-second
@@ -409,7 +411,7 @@ make lint
 make ui-check            # TypeScript checks and Vite production build
 make test-ui             # Playwright against a running local Compose stack
 make test-integration    # native Git/SSH/LFS and opt-in S3 integration suites
-npm --prefix web run test:pagination # isolated browser pagination regressions
+npm --prefix web run test:ui # isolated browsing, pagination, and UI regressions
 go test -tags=integration ./internal/auth -run '^TestGitPAT'  # requires native Git
 go test -race -tags=integration ./internal/lfs ./internal/sshserver -run LFS # requires Git and Git LFS
 ```

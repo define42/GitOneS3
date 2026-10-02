@@ -4,8 +4,9 @@ NPM := npm
 VERSION ?= $(shell git describe --tags --always --dirty)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 COMPOSE := docker compose
+QUALIFICATION_OUTPUT ?= $(CURDIR)/tmp/qualification
 
-.PHONY: all build build-s3check ui ui-check test-ui clean test test-integration test-short lint lint-fix fmt audit run run-local stop logs smoke smoke-git
+.PHONY: all build build-s3check ui ui-check test-ui clean test test-integration qualify-s3 test-short lint lint-fix fmt audit run run-local stop logs smoke smoke-git
 
 all: lint test build
 
@@ -39,6 +40,12 @@ test:
 test-integration:
 	$(GO) test -race -tags=integration -shuffle=on -count=1 -timeout=10m -skip '^(TestNativeGitLargeStreamingLifecycle|TestNativeSSHLargeShardPush)$$' ./...
 	$(GO) test -tags=integration -shuffle=on -count=1 -timeout=10m -p=1 -run '^(TestNativeGitLargeStreamingLifecycle|TestNativeSSHLargeShardPush)$$' ./internal/gittransport ./internal/sshserver
+
+# Creates only a fresh random test bucket; requires bucket create/delete rights.
+# Preserve JSON measurements and storage metrics outside the source tree.
+qualify-s3:
+	mkdir -p "$(QUALIFICATION_OUTPUT)"
+	GITONE_QUALIFY_S3=1 $(GO) test -tags=integration ./internal/gittransport -run '^TestS3GitQualification$$' -count=1 -v -timeout=45m -artifacts -outputdir="$(QUALIFICATION_OUTPUT)"
 
 test-short:
 	$(GO) test -short ./...

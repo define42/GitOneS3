@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && vite build",
     "test:e2e": "playwright test",
-    "test:pagination": "playwright test --config=playwright.pagination.config.ts"
+    "test:pagination": "playwright test --config=playwright.pagination.config.ts",
+    "test:ui": "playwright test --config=playwright.ui.config.ts"
   },
   "dependencies": {
     "react": "19.3.0",

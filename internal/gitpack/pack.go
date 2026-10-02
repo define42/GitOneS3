@@ -55,6 +55,16 @@ type Object struct {
 // pack bases; Write uses it to load one object at a time.
 type Resolver func(context.Context, string) (Object, error)
 
+// DecodeOptions controls optional preparation of external delta-base reads.
+type DecodeOptions struct {
+	// PrepareBases runs at most once after the complete checksum is verified and
+	// before Resolver is called. IDs are unique REF_DELTA bases not already
+	// identified in the incoming pack. Some may still resolve to incoming
+	// deltas, so this is a read-planning hint, not a list of required externals.
+	// The callback must preserve the caller's authorization and resource limits.
+	PrepareBases func(context.Context, []string) error
+}
+
 // Entry describes one non-delta pack entry. Offset and Length cover its packed
 // header and zlib stream. SHA256 covers the canonical Git header and body, while
 // CRC32 covers the encoded pack entry, as in a Git pack index.
@@ -151,7 +161,10 @@ func (w *Workspace) Get(ctx context.Context, id string) (_ Object, resultErr err
 // for EOF (SSH keeps the connection open for the response). The caller validates
 // trailing data if its transport requires EOF. A buffered input implementing
 // io.ByteReader is reused, preserving bytes already read from the transport.
-func Decode(ctx context.Context, input io.Reader, limits Limits, resolve Resolver) (_ *Workspace, resultErr error) {
+func Decode(ctx context.Context, input io.Reader, limits Limits, resolve Resolver, options ...DecodeOptions) (_ *Workspace, resultErr error) {
+	if len(options) > 1 {
+		return nil, ErrInvalid
+	}
 	if !limits.valid() {
 		return nil, ErrLimit
 	}
@@ -251,6 +264,27 @@ func Decode(ctx context.Context, input io.Reader, limits Limits, resolve Resolve
 	}
 	if !slices.Equal(checksum, trailer[:]) {
 		return nil, ErrInvalid
+	}
+	if len(options) == 1 && options[0].PrepareBases != nil && resolve != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		bases := make(map[string]bool)
+		for _, entry := range w.entries {
+			if entry.baseID != "" && w.objects[entry.baseID] == nil {
+				bases[entry.baseID] = true
+			}
+		}
+		ids := make([]string, 0, len(bases))
+		for id := range bases {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
+		if len(ids) > 0 {
+			if err := options[0].PrepareBases(ctx, ids); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if err := w.resolve(ctx, byOffset, resolve); err != nil {
 		return nil, err

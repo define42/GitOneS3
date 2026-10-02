@@ -101,6 +101,19 @@ func TestAPIRepositoryPersonalLifecycle(t *testing.T) {
 	}
 	base := "/api/v1/repos/alice/hello-world"
 	check("GET", base, "", 200)
+	browsed := check("GET", base+"/browse", "", 200)
+	var page browseOutput
+	if err := json.Unmarshal(browsed.Body.Bytes(), &page.Body); err != nil {
+		t.Fatal(err)
+	}
+	if page.Body.Repository.Name != "hello-world" || page.Body.Repository.Role != "owner" || len(page.Body.Branches) != 1 || page.Body.Tree == nil || page.Body.Readme == nil || page.Body.Readme.Commit != page.Body.Branches[0].Commit {
+		t.Fatalf("combined browser: %s", browsed.Body)
+	}
+	check("GET", base+"/browse?path=README.md", "", 200)
+	check("GET", base+"/browse?view=commits", "", 200)
+	check("GET", base+"/browse?view=unknown", "", 422)
+	check("GET", base+"/browse?ref=missing", "", 404)
+	check("GET", base+"/browse?path=missing", "", 404)
 	branches := check("GET", base+"/branches", "", 200)
 	if !strings.Contains(branches.Body.String(), `"name":"main"`) {
 		t.Fatalf("branches: %s", branches.Body.String())
@@ -121,7 +134,7 @@ func TestAPIRepositoryPersonalLifecycle(t *testing.T) {
 	if !strings.Contains(commits.Body.String(), `"authorName":"alice"`) || !strings.Contains(commits.Body.String(), blob.Commit) {
 		t.Fatalf("history: %s", commits.Body.String())
 	}
-	for _, suffix := range []string{"", "/branches", "/tree", "/commits"} {
+	for _, suffix := range []string{"", "/branches", "/tree", "/commits", "/browse"} {
 		check("GET", "/api/v1/repos/alice/empty"+suffix, "", 200)
 	}
 	check("GET", "/api/v1/repos/alice/empty/blob?path=README.md", "", 404)
@@ -148,7 +161,7 @@ func TestAPIRepositoryRolesAndRevocation(t *testing.T) {
 	ownerCheck("POST", "/api/v1/groups/acme", "", 201)
 	ownerCheck("POST", "/api/v1/repos/acme", `{"name":"project","initializeReadme":true}`, 201)
 	base := "/api/v1/repos/acme/project"
-	paths := []string{"/api/v1/repos/acme", base, base + "/branches", base + "/tree", base + "/blob?path=README.md", base + "/commits"}
+	paths := []string{"/api/v1/repos/acme", base, base + "/branches", base + "/tree", base + "/blob?path=README.md", base + "/commits", base + "/browse", base + "/browse?path=README.md", base + "/browse?view=commits"}
 	ownerCheck("POST", "/api/v1/groups/acme/invitations", `{"userId":"google:bob-id","role":"reader"}`, 200)
 	for _, path := range paths {
 		outsiderCheck("GET", path, "", 403)

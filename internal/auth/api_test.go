@@ -352,13 +352,14 @@ func TestAPIOpenAPIAndCrossShardForwarding(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &document); err != nil {
 		t.Fatal(err)
 	}
-	if w.Code != 200 || document.OpenAPI != "3.1.0" || len(document.Paths) != 21 {
+	if w.Code != 200 || document.OpenAPI != "3.1.0" || len(document.Paths) != 22 {
 		t.Fatalf("invalid API specification: status=%d, paths=%d, openapi=%s", w.Code, len(document.Paths), document.OpenAPI)
 	}
 	if !strings.Contains(string(document.Paths["/api/v1/groups/{name}/invitations"]), `"security"`) {
 		t.Fatal("OpenAPI does not describe session authentication")
 	}
 	for _, path := range []string{"/api/v1/repos/{namespace}", "/api/v1/repos/{namespace}/{repository}",
+		"/api/v1/repos/{namespace}/{repository}/browse",
 		"/api/v1/repos/{namespace}/{repository}/branches", "/api/v1/repos/{namespace}/{repository}/tree",
 		"/api/v1/repos/{namespace}/{repository}/blob", "/api/v1/repos/{namespace}/{repository}/commits",
 		"/api/v1/users/{name}/ssh-keys", "/api/v1/users/{name}/ssh-keys/{id}"} {

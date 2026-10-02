@@ -42,6 +42,7 @@ func Write(ctx context.Context, output io.Writer, ids []string, resolve Resolver
 	}
 	entries := make([]Entry, 0, len(ids))
 	var total int64
+	var zw *zlib.Writer
 	for _, id := range ids {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -67,7 +68,13 @@ func Write(ctx context.Context, output io.Writer, ids []string, resolve Resolver
 		if _, err := out.Write(encodeHeader(kind, size)); err != nil {
 			return nil, err
 		}
-		zw := zlib.NewWriter(out)
+		// Each object needs an independent zlib stream, but the compressor's
+		// large buffers can be reused after Close. Keep them local to this pack.
+		if zw == nil {
+			zw = zlib.NewWriter(out)
+		} else {
+			zw.Reset(out)
+		}
 		_, writeErr := zw.Write(object.Data)
 		if err := errors.Join(writeErr, zw.Close()); err != nil {
 			return nil, err

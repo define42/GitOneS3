@@ -101,6 +101,7 @@ type Service struct {
 	tokenResolver      TokenResolver
 	tokenClient        *http.Client
 	lfsBatches         chan struct{}
+	browserReads       chan struct{}
 	sshPublicURL       string
 	spaceDiscoveryMode string
 }
@@ -135,6 +136,7 @@ func New(options Options) (*Service, error) {
 		provider:     options.Provider, next: options.Next, origin: options.Config.PublicURL,
 		tokenResolver:      options.TokenResolver,
 		lfsBatches:         make(chan struct{}, 8),
+		browserReads:       make(chan struct{}, maxBrowserReads),
 		sshPublicURL:       options.SSHPublicURL,
 		spaceDiscoveryMode: options.SpaceDiscoveryMode,
 		tokenClient: &http.Client{Transport: options.TokenTransport, Timeout: 5 * time.Second,

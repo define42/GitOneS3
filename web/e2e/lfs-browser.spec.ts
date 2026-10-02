@@ -20,8 +20,31 @@ async function mockRepository(
     ...overrides,
   };
   blob.lfs = { oid, size: blob.size };
+  const repository = {
+    id: "test-repository",
+    namespace: "alice",
+    name: "hello",
+    description: "LFS browser test",
+    defaultBranch: "main",
+    createdAt: "2026-01-01T00:00:00Z",
+    createdBy: "oidc:alice",
+    visibility: "private",
+    empty: false,
+    role: "owner",
+    canWrite: true,
+  };
+  const tree = {
+    ref: "main",
+    path: "",
+    commit: blob.commit,
+    entries: [
+      { name: blob.path, path: blob.path, type: "file", size: blob.size, lfs: blob.lfs },
+      { name: "plain.txt", path: "plain.txt", type: "file", size: 12 },
+    ],
+  };
   await page.route("**/api/v1/**", async (route) => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path = url.pathname;
     if (path === "/api/v1/session") {
       await route.fulfill({
         json: {
@@ -34,44 +57,24 @@ async function mockRepository(
       });
     } else if (path === "/api/v1/spaces") {
       await route.fulfill({ json: { spaces: [] } });
-    } else if (path === "/api/v1/repos/alice/hello") {
+    } else if (path === "/api/v1/repos/alice/hello/browse") {
       await route.fulfill({
         json: {
-          id: "test-repository",
-          namespace: "alice",
-          name: "hello",
-          description: "LFS browser test",
-          defaultBranch: "main",
-          createdAt: "2026-01-01T00:00:00Z",
-          createdBy: "oidc:alice",
-          visibility: "private",
-          empty: false,
-          role: "owner",
-          canWrite: true,
+          repository,
+          branches: [{ name: "main", commit: blob.commit }],
+          ...(url.searchParams.get("path")
+            ? { blob }
+            : { tree, ...(/^readme(?:\.md|\.txt)?$/i.test(blob.path) ? { readme: blob } : {}) }),
         },
       });
+    } else if (path === "/api/v1/repos/alice/hello") {
+      await route.fulfill({ json: repository });
     } else if (path === "/api/v1/repos/alice/hello/branches") {
       await route.fulfill({
         json: { branches: [{ name: "main", commit: blob.commit }] },
       });
     } else if (path === "/api/v1/repos/alice/hello/tree") {
-      await route.fulfill({
-        json: {
-          ref: "main",
-          path: "",
-          commit: blob.commit,
-          entries: [
-            {
-              name: blob.path,
-              path: blob.path,
-              type: "file",
-              size: blob.size,
-              lfs: blob.lfs,
-            },
-            { name: "plain.txt", path: "plain.txt", type: "file", size: 12 },
-          ],
-        },
-      });
+      await route.fulfill({ json: tree });
     } else if (path === "/api/v1/repos/alice/hello/blob") {
       await route.fulfill({ json: blob });
     } else {

@@ -7,6 +7,7 @@ import type {
   Repository,
   RepositoryBlob,
   RepositoryBranch,
+  RepositoryBrowse,
   RepositoryCommit,
   RepositoryList as RepositoryListData,
   RepositoryTree,
@@ -749,7 +750,8 @@ export function RepositoryPage({
   const [refresh, setRefresh] = useState(0);
   const [cloneProtocol, setCloneProtocol] = useState<CloneProtocol>("HTTPS");
   const query = new URLSearchParams(location.search);
-  const selectedRef = query.get("ref") ?? repository?.defaultBranch ?? "main";
+  const requestedRef = query.get("ref") ?? "";
+  const selectedRef = requestedRef || repository?.defaultBranch || "main";
   const path = query.get("path") ?? "";
   const history = query.get("view") === "commits";
   const base = `/${namespace}/${name}`;
@@ -765,15 +767,23 @@ export function RepositoryPage({
   }
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
     setError("");
-    Promise.all([
-      api<Repository>(endpoint),
-      api<{ branches: RepositoryBranch[] }>(`${endpoint}/branches`),
-    ])
-      .then(([repo, result]) => {
+    setRepository(null);
+    setBranches([]);
+    setData(null);
+    const params = new URLSearchParams();
+    if (requestedRef) params.set("ref", requestedRef);
+    if (path) params.set("path", path);
+    if (history) params.set("view", "commits");
+    api<RepositoryBrowse>(`${endpoint}/browse?${params}`, {
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]),
+    })
+      .then((result) => {
         if (active) {
-          setRepository(repo);
+          setRepository(result.repository);
           setBranches(result.branches);
+          setData(result);
         }
       })
       .catch((e) => {
@@ -781,65 +791,9 @@ export function RepositoryPage({
       });
     return () => {
       active = false;
+      controller.abort();
     };
-  }, [endpoint, refresh]);
-  useEffect(() => {
-    if (!repository) return;
-    let active = true;
-    setData(null);
-    async function load(): Promise<BrowserData> {
-      if (repository!.empty) return {};
-      const params = new URLSearchParams({ ref: selectedRef });
-      if (history)
-        return {
-          commits: (
-            await api<{ commits: RepositoryCommit[] }>(
-              `${endpoint}/commits?${params}`,
-            )
-          ).commits,
-        };
-      if (path) {
-        const parent = path.split("/").slice(0, -1).join("/");
-        const listing = await api<RepositoryTree>(
-          `${endpoint}/tree?${new URLSearchParams({ ref: selectedRef, path: parent })}`,
-        );
-        const entry = listing.entries.find((item) => item.path === path);
-        if (!entry)
-          throw new Error(
-            "That file or directory does not exist on this branch. Return to the repository root or choose another branch.",
-          );
-        if (entry.type === "file")
-          return {
-            blob: await api<RepositoryBlob>(
-              `${endpoint}/blob?${new URLSearchParams({ ref: selectedRef, path })}`,
-            ),
-          };
-      }
-      const tree = await api<RepositoryTree>(
-        `${endpoint}/tree?${new URLSearchParams({ ref: selectedRef, path })}`,
-      );
-      const readmeEntry = tree.entries.find(
-        (entry) =>
-          entry.type === "file" && /^readme(?:\.md|\.txt)?$/i.test(entry.name),
-      );
-      const readme = readmeEntry
-        ? await api<RepositoryBlob>(
-            `${endpoint}/blob?${new URLSearchParams({ ref: selectedRef, path: readmeEntry.path })}`,
-          )
-        : undefined;
-      return { tree, readme };
-    }
-    load()
-      .then((result) => {
-        if (active) setData(result);
-      })
-      .catch((e) => {
-        if (active) setError(errorMessage(e));
-      });
-    return () => {
-      active = false;
-    };
-  }, [repository, endpoint, selectedRef, path, history, refresh]);
+  }, [endpoint, requestedRef, path, history, refresh]);
   const pathParts = path.split("/").filter(Boolean);
   return (
     <main id="main" className="container repository-page">

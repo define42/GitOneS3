@@ -45,16 +45,25 @@ func packEntry(id string, info objectInfo) gitpack.Entry {
 		Offset: info.Offset, Length: info.Length, CRC32: info.CRC32}
 }
 
-// GitReader pins one published manifest and lazily caches immutable packs on
-// temporary disk. Payload memory is bounded by one decoded object, regardless
-// of repository size. It is local workspace only and is removed by Close.
+const (
+	maxGitMetadataCacheBytes   = 4 << 20
+	maxGitMetadataCacheObjects = 4096
+)
+
+// GitReader pins one published manifest. Sparse reads verify individual pack
+// entries; Prefetch caches densely requested packs on temporary disk. Decoded
+// metadata has a separate bounded cache. The reader is local to one operation,
+// is not safe for concurrent use, and releases its caches when closed.
 type GitReader struct {
-	store      *Store
-	base       *GitSnapshot
-	dir        string
-	cached     map[string]string
-	cacheBytes int64
-	closed     bool
+	store         *Store
+	base          *GitSnapshot
+	dir           string
+	cached        map[string]string
+	packSizes     map[string]int64
+	cacheBytes    int64
+	metadata      map[string]gitpack.Object
+	metadataBytes int
+	closed        bool
 }
 
 func (s *Store) OpenGit(_ context.Context, base *GitSnapshot) (*GitReader, error) {
@@ -77,11 +86,19 @@ func (s *Store) openGitSnapshot(snap snapshot) (*GitReader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create Git workspace: %w", err)
 	}
-	return &GitReader{store: s, base: &GitSnapshot{DefaultBranch: snap.metadata.DefaultBranch, References: snap.refs.Refs, original: snap}, dir: dir, cached: map[string]string{}}, nil
+	return &GitReader{
+		store: s, base: &GitSnapshot{DefaultBranch: snap.metadata.DefaultBranch, References: snap.refs.Refs, original: snap},
+		dir: dir, cached: map[string]string{}, packSizes: map[string]int64{}, metadata: map[string]gitpack.Object{},
+	}, nil
 }
 
 func (r *GitReader) Close() error {
 	r.closed = true
+	r.cached = nil
+	r.packSizes = nil
+	r.cacheBytes = 0
+	r.metadata = nil
+	r.metadataBytes = 0
 	return os.RemoveAll(r.dir) // #nosec G703 -- dir is created by os.MkdirTemp and never comes from repository contents.
 }
 
@@ -92,26 +109,26 @@ func (r *GitReader) Get(ctx context.Context, id string) (gitpack.Object, error) 
 	if r.closed {
 		return gitpack.Object{}, errors.New("git workspace closed")
 	}
+	if object, ok := r.metadata[id]; ok {
+		// Callers own the returned bytes; mutation must not poison later reads.
+		return gitpack.Object{Type: object.Type, Data: slices.Clone(object.Data)}, nil
+	}
 	info, ok := r.base.original.manifest.Objects[id]
 	if !ok {
 		return gitpack.Object{}, gitpack.ErrNotFound
 	}
-	if info.PackKey == "" {
-		data, err := r.store.object(ctx, r.base.original, id, info.Type)
-		return gitpack.Object{Type: info.Type, Data: data}, err
-	}
 	if !validObjectInfo(id, info) {
 		return gitpack.Object{}, ErrCorrupt
 	}
-	fileName, err := r.cachePack(ctx, info.PackKey)
-	if err != nil {
-		return gitpack.Object{}, err
-	}
+	fileName := r.cached[info.PackKey]
 	if fileName == "" {
-		// A repository may reference small slices of many old packs. Avoid
-		// unbounded disk use: uncached packs use validated S3 range reads.
+		// A tiny commit or thin-pack base must not download unrelated blobs.
+		// The range path checks the CRC, object ID and independent SHA-256.
 		data, err := r.store.object(ctx, r.base.original, id, info.Type)
-		return gitpack.Object{Type: info.Type, Data: data}, err
+		if err != nil {
+			return gitpack.Object{}, err
+		}
+		return r.rememberMetadata(id, gitpack.Object{Type: info.Type, Data: data}), nil
 	}
 	file, err := os.Open(fileName) // #nosec G304 G703 -- Name is generated in our private temporary directory.
 	if err != nil {
@@ -121,22 +138,96 @@ func (r *GitReader) Get(ctx context.Context, id string) (gitpack.Object, error) 
 	if err := errors.Join(readErr, file.Close()); err != nil {
 		return gitpack.Object{}, errors.Join(ErrCorrupt, err)
 	}
-	return object, nil
+	return r.rememberMetadata(id, object), nil
 }
 
-func (r *GitReader) cachePack(ctx context.Context, relative string) (string, error) {
+func (r *GitReader) rememberMetadata(id string, object gitpack.Object) gitpack.Object {
+	if object.Type != "blob" && len(r.metadata) < maxGitMetadataCacheObjects &&
+		len(object.Data) <= maxGitMetadataCacheBytes-r.metadataBytes {
+		r.metadata[id] = gitpack.Object{Type: object.Type, Data: slices.Clone(object.Data)}
+		r.metadataBytes += len(object.Data)
+	}
+	return object
+}
+
+// Prefetch prepares densely requested packs for a sequence of Get calls. Packs
+// with less than half their bytes requested stay on verified range reads, so an
+// incremental fetch does not pull an old pack just to read its commit or tree.
+// Sparse reads remain available if the bounded temporary disk cache is full.
+func (r *GitReader) Prefetch(ctx context.Context, ids []string) error {
+	if len(ids) > MaxGitObjects {
+		return ErrLimit
+	}
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if _, ok := r.base.original.manifest.Objects[id]; !ok {
+			return gitpack.ErrNotFound
+		}
+		wanted[id] = true
+	}
+	return r.prefetch(ctx, func(id string, _ objectInfo) bool { return wanted[id] })
+}
+
+func (r *GitReader) prefetch(ctx context.Context, selected func(string, objectInfo) bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r.closed {
+		return errors.New("git workspace closed")
+	}
+	type packReadPlan struct{ selected, minimumSize int64 }
+	plans := map[string]packReadPlan{}
+	for id, info := range r.base.original.manifest.Objects {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if info.PackKey == "" {
+			continue
+		}
+		if !validObjectInfo(id, info) {
+			return ErrCorrupt
+		}
+		plan := plans[info.PackKey]
+		// This lower bound avoids even a HEAD for sparse metadata in a large
+		// pack. A pack may also contain objects no longer in this manifest.
+		plan.minimumSize = max(plan.minimumSize, info.Offset+info.Length+20)
+		if selected(id, info) {
+			plan.selected += info.Length
+		}
+		plans[info.PackKey] = plan
+	}
+	for relative, plan := range plans {
+		if plan.selected == 0 || plan.selected < (plan.minimumSize+1)/2 {
+			continue
+		}
+		if _, err := r.cachePack(ctx, relative, plan.selected); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *GitReader) cachePack(ctx context.Context, relative string, selected int64) (string, error) {
 	if name, ok := r.cached[relative]; ok {
 		return name, nil
 	}
 	key := "repos/" + r.base.original.metadata.ID + "/" + relative
-	info, err := r.store.objects.Head(ctx, key)
-	if err != nil {
-		return "", errors.Join(ErrCorrupt, err)
+	size, ok := r.packSizes[relative]
+	if !ok {
+		info, err := r.store.objects.Head(ctx, key)
+		if err != nil {
+			return "", errors.Join(ErrCorrupt, err)
+		}
+		if info.Size < 32 || info.Size > MaxPackBytes {
+			return "", ErrCorrupt
+		}
+		size = info.Size
+		r.packSizes[relative] = size
 	}
-	if info.Size < 32 || info.Size > MaxPackBytes {
-		return "", ErrCorrupt
+	if selected < (size+1)/2 {
+		return "", nil
 	}
-	if info.Size > MaxPackBytes-r.cacheBytes {
+	if size > MaxPackBytes-r.cacheBytes {
 		r.cached[relative] = ""
 		return "", nil
 	}
@@ -155,12 +246,12 @@ func (r *GitReader) cachePack(ctx context.Context, relative string) (string, err
 		}
 	}()
 	digest := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(file, digest), &contextReader{ctx: ctx, reader: io.LimitReader(body, info.Size+1)})
+	n, copyErr := io.Copy(io.MultiWriter(file, digest), &contextReader{ctx: ctx, reader: io.LimitReader(body, size+1)})
 	closeErr := errors.Join(body.Close(), file.Close())
 	if err := errors.Join(copyErr, closeErr); err != nil {
 		return "", err
 	}
-	if n != info.Size || got.Size != info.Size || relative != "packs/"+hex.EncodeToString(digest.Sum(nil))+".pack" {
+	if n != size || got.Size != size || relative != "packs/"+hex.EncodeToString(digest.Sum(nil))+".pack" {
 		return "", ErrCorrupt
 	}
 	r.cacheBytes += n
@@ -266,6 +357,9 @@ func (r *GitReader) object(ctx context.Context, id string) (GitObject, error) {
 // Validate checks the published graph before accepting client have IDs. Orphan
 // manifest entries must never be treated as client/server common history.
 func (r *GitReader) Validate(ctx context.Context) error {
+	if err := r.prefetch(ctx, func(_ string, info objectInfo) bool { return info.Type != "blob" }); err != nil {
+		return err
+	}
 	objects, err := walkObjects(ctx, r.base.References, r.base.original.manifest.Objects, r.object)
 	if err != nil {
 		return errors.Join(ErrCorrupt, err)
@@ -370,6 +464,13 @@ func (s *Store) publishObjects(ctx context.Context, base *GitSnapshot, updates [
 		return err
 	}
 	defer func() { err = errors.Join(err, reader.Close()) }()
+	// Publication walks existing metadata and checks every reachable small blob
+	// for LFS pointers. Coalesce those reads when they cover most of a pack.
+	if err := reader.prefetch(ctx, func(_ string, info objectInfo) bool {
+		return info.Type != "blob" || info.Size <= maxLFSPointerBytes
+	}); err != nil {
+		return err
+	}
 	infos := maps.Clone(base.original.manifest.Objects)
 	for id, info := range incoming {
 		if !objectIDPattern.MatchString(id) || info.Size < 0 || info.Size > MaxGitObjectBytes {

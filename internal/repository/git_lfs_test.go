@@ -165,7 +165,7 @@ func publishBrowserFiles(t *testing.T, store *Store, files map[string][]byte) {
 		"\nauthor Alice <alice@example.com> 1700000000 +0000\ncommitter Alice <alice@example.com> 1700000000 +0000\n\nFiles\n")}
 	commitID := GitObjectID(commit)
 	objects[commitID] = commit
-	if err := store.PublishGit(t.Context(), base, []RefUpdate{{Name: "refs/heads/main", New: commitID}}, objects, allowLFS); err != nil {
+	if err := store.PublishGit(t.Context(), base, []RefUpdate{{Name: "refs/heads/main", Old: base.References["refs/heads/main"], New: commitID}}, objects, allowLFS); err != nil {
 		t.Fatal(err)
 	}
 }

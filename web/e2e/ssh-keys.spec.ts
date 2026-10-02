@@ -250,25 +250,25 @@ for (const sshEnabled of [true, false]) {
         },
       }),
     );
-    await page.route(`**/api/v1/repos/${namespace}/project`, (route) =>
+    await page.route(`**/api/v1/repos/${namespace}/project/browse*`, (route) =>
       route.fulfill({
         json: {
-          id: "project",
-          namespace,
-          name: "project",
-          description: "",
-          defaultBranch: "main",
-          createdAt: new Date().toISOString(),
-          createdBy: "owner",
-          visibility: "private",
-          empty: true,
-          role: "developer",
-          canWrite: true,
+          repository: {
+            id: "project",
+            namespace,
+            name: "project",
+            description: "",
+            defaultBranch: "main",
+            createdAt: new Date().toISOString(),
+            createdBy: "owner",
+            visibility: "private",
+            empty: true,
+            role: "developer",
+            canWrite: true,
+          },
+          branches: [],
         },
       }),
-    );
-    await page.route(`**/api/v1/repos/${namespace}/project/branches`, (route) =>
-      route.fulfill({ json: { branches: [] } }),
     );
     await page.goto(`/${namespace}/project`);
     await expect(

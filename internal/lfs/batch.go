@@ -87,6 +87,21 @@ func (h *Handler) batch(w http.ResponseWriter, r *http.Request, target route) {
 			return
 		}
 	}
+	// Resolve repository identity once and overlap the verified-record and
+	// payload checks. Keep validation and response assembly in request order.
+	oids := make([]string, 0, len(request.Objects))
+	for _, requested := range request.Objects {
+		if repository.ValidLFSOID(requested.OID) && requested.Size >= 0 &&
+			(request.Operation != "upload" || requested.Size <= h.options.MaxObjectBytes) {
+			oids = append(oids, requested.OID)
+		}
+	}
+	lookups, err := h.store.LFSStatBatch(r.Context(), target.namespace, target.name, oids)
+	if err != nil {
+		repositoryError(w, err)
+		return
+	}
+	nextLookup := 0
 	response := batchResponse{Transfer: "basic", HashAlgo: "sha256", Objects: make([]batchObject, 0, len(request.Objects))}
 	base := h.options.PublicURL + "/" + target.namespace + "/" + target.name + ".git/info/lfs/objects/"
 	for _, requested := range request.Objects {
@@ -101,7 +116,8 @@ func (h *Handler) batch(w http.ResponseWriter, r *http.Request, target route) {
 		case request.Operation == "upload" && requested.Size > h.options.MaxObjectBytes:
 			result.Error = &objectError{Code: http.StatusRequestEntityTooLarge, Message: "LFS object exceeds size limit"}
 		default:
-			object, err := h.store.LFSStat(r.Context(), target.namespace, target.name, requested.OID)
+			object, err := lookups[nextLookup].Object, lookups[nextLookup].Err
+			nextLookup++
 			switch {
 			case err == nil:
 				if object.Size != requested.Size {

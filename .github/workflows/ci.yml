@@ -89,6 +89,24 @@ jobs:
       - name: Run integration race checks and large native transfers
         run: make test-integration
 
+      - name: Exercise S3 load and recovery qualification
+        env:
+          GITONE_QUALIFY_MIB: "4"
+          GITONE_QUALIFY_CLIENTS: "2"
+          GITONE_GIT_MAX_CONCURRENT_OPERATIONS: "2"
+          GITONE_QUALIFY_ROUNDS: "2"
+        run: make qualify-s3
+
+      - name: Preserve S3 qualification measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: s3-qualification
+          path: |
+            tmp/qualification/**/qualification.json
+            tmp/qualification/**/storage.prom
+          if-no-files-found: ignore
+
       - name: Show S3 logs on failure
         if: failure()
         run: docker logs gitone-ci-minio
@@ -101,7 +119,7 @@ jobs:
           fi
 
   frontend:
-    name: Frontend build and pagination
+    name: Frontend build and browser regressions
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -124,8 +142,8 @@ jobs:
         working-directory: web
         run: npx playwright install --with-deps chromium
 
-      - name: Check repository pagination in the browser
-        run: npm --prefix web run test:pagination
+      - name: Check repository browsing, pagination, and UI controls
+        run: npm --prefix web run test:ui
 
       - name: Check production frontend dependencies
         run: npm --prefix web audit --omit=dev

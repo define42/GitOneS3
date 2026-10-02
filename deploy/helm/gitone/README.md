@@ -5,6 +5,10 @@ one public Service, and one headless Service for direct shard forwarding. The
 StatefulSet replica count and the mounted cluster identity both come from
 `shardCount`; there is no independent replica setting.
 
+Run the [deployment qualification procedure](../../../docs/production-qualification.md)
+with the intended pod resources and S3 provider before rollout. It includes a
+repeatable S3 load test, capacity checks, and recovery and backup exercises.
+
 ## Shared-space discovery upgrades
 
 `spaceDiscoveryMode` defaults to `indexed`. Existing stores without a completed

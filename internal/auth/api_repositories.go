@@ -71,6 +71,7 @@ func (s *Service) registerRepositoryAPI(api huma.API) {
 	registerAPI(api, "list-repositories", "GET", "/api/v1/repos/{namespace}", "List private repositories in a space", false, http.StatusOK, s.apiRepositories)
 	registerAPI(api, "create-repository", "POST", "/api/v1/repos/{namespace}", "Create a private repository", false, http.StatusCreated, s.apiCreateRepository)
 	registerAPI(api, "get-repository", "GET", "/api/v1/repos/{namespace}/{repository}", "Get a private repository", false, http.StatusOK, s.apiRepository)
+	registerAPI(api, "browse-repository", "GET", "/api/v1/repos/{namespace}/{repository}/browse", "Browse one published repository generation", false, http.StatusOK, s.apiBrowse)
 	registerAPI(api, "list-branches", "GET", "/api/v1/repos/{namespace}/{repository}/branches", "List repository branches", false, http.StatusOK, s.apiBranches)
 	registerAPI(api, "get-tree", "GET", "/api/v1/repos/{namespace}/{repository}/tree", "Browse a repository directory", false, http.StatusOK, s.apiTree)
 	registerAPI(api, "get-blob", "GET", "/api/v1/repos/{namespace}/{repository}/blob", "View a repository file", false, http.StatusOK, s.apiBlob)
@@ -147,6 +148,11 @@ func (s *Service) apiRepository(ctx context.Context, input *repositoryInput) (*r
 	if err != nil {
 		return nil, err
 	}
+	release, err := s.acquireBrowser(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	metadata, err := s.repositories.Get(ctx, input.Namespace, input.Repository)
 	if err != nil {
 		return nil, repositoryAPIError(err)
@@ -158,6 +164,11 @@ func (s *Service) apiBranches(ctx context.Context, input *repositoryInput) (*bra
 	if _, err := s.repositoryRole(ctx, input.Namespace, false); err != nil {
 		return nil, err
 	}
+	release, err := s.acquireBrowser(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	branches, err := s.repositories.Branches(ctx, input.Namespace, input.Repository)
 	if err != nil {
 		return nil, repositoryAPIError(err)
@@ -171,6 +182,11 @@ func (s *Service) apiTree(ctx context.Context, input *repositoryInput) (*treeOut
 	if _, err := s.repositoryRole(ctx, input.Namespace, false); err != nil {
 		return nil, err
 	}
+	release, err := s.acquireBrowser(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	tree, err := s.repositories.Tree(ctx, input.Namespace, input.Repository, input.Ref, input.Path)
 	if err != nil {
 		return nil, repositoryAPIError(err)
@@ -182,6 +198,11 @@ func (s *Service) apiBlob(ctx context.Context, input *repositoryInput) (*blobOut
 	if _, err := s.repositoryRole(ctx, input.Namespace, false); err != nil {
 		return nil, err
 	}
+	release, err := s.acquireBrowser(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	blob, err := s.repositories.Blob(ctx, input.Namespace, input.Repository, input.Ref, input.Path)
 	if err != nil {
 		return nil, repositoryAPIError(err)
@@ -193,6 +214,11 @@ func (s *Service) apiCommits(ctx context.Context, input *repositoryInput) (*comm
 	if _, err := s.repositoryRole(ctx, input.Namespace, false); err != nil {
 		return nil, err
 	}
+	release, err := s.acquireBrowser(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	commits, err := s.repositories.Commits(ctx, input.Namespace, input.Repository, input.Ref)
 	if err != nil {
 		return nil, repositoryAPIError(err)

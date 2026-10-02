@@ -159,6 +159,10 @@ func (s *Store) Branches(ctx context.Context, namespace, name string) ([]Branch,
 	if err != nil {
 		return nil, err
 	}
+	return snapshotBranches(snap), nil
+}
+
+func snapshotBranches(snap snapshot) []Branch {
 	branches := make([]Branch, 0, len(snap.refs.Refs))
 	for ref, commit := range snap.refs.Refs {
 		if !strings.HasPrefix(ref, "refs/heads/") {
@@ -167,7 +171,7 @@ func (s *Store) Branches(ctx context.Context, namespace, name string) ([]Branch,
 		branches = append(branches, Branch{Name: strings.TrimPrefix(ref, "refs/heads/"), Commit: commit})
 	}
 	slices.SortFunc(branches, func(a, b Branch) int { return strings.Compare(a.Name, b.Name) })
-	return branches, nil
+	return branches
 }
 
 func resolveRef(snap snapshot, ref string) (string, string, error) {
@@ -284,6 +288,10 @@ func (s *Store) Tree(ctx context.Context, namespace, name, ref, path string) (Tr
 	if err != nil {
 		return Tree{}, err
 	}
+	return s.snapshotTree(ctx, snap, ref, path)
+}
+
+func (s *Store) snapshotTree(ctx context.Context, snap snapshot, ref, path string) (Tree, error) {
 	ref, commit, err := resolveRef(snap, ref)
 	if err != nil {
 		return Tree{}, err
@@ -346,6 +354,10 @@ func (s *Store) Blob(ctx context.Context, namespace, name, ref, path string) (Bl
 	if err != nil {
 		return Blob{}, err
 	}
+	return s.snapshotBlob(ctx, snap, ref, path)
+}
+
+func (s *Store) snapshotBlob(ctx context.Context, snap snapshot, ref, path string) (Blob, error) {
 	ref, commit, err := resolveRef(snap, ref)
 	if err != nil {
 		return Blob{}, err
@@ -371,7 +383,7 @@ func (s *Store) Blob(ctx context.Context, namespace, name, ref, path string) (Bl
 	if object, pointer, err := parseLFSPointer(content); pointer && err == nil {
 		result.LFS, result.Size = &object, object.Size
 		result.TooLarge = object.Size > maxObjectBytes
-		content, err = s.lfsPreview(ctx, namespace, name, object)
+		content, err = s.lfsPreview(ctx, snap.metadata.Namespace, snap.metadata.Name, object)
 		if err != nil {
 			return Blob{}, err
 		}
@@ -422,6 +434,10 @@ func (s *Store) Commits(ctx context.Context, namespace, name, ref string) ([]Com
 	if err != nil {
 		return nil, err
 	}
+	return s.snapshotCommits(ctx, snap, ref)
+}
+
+func (s *Store) snapshotCommits(ctx context.Context, snap snapshot, ref string) ([]Commit, error) {
 	_, id, err := resolveRef(snap, ref)
 	if err != nil {
 		return nil, err

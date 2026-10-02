@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -316,7 +315,11 @@ func (s *Store) reserveLFS(ctx context.Context, repositoryID string, object LFSO
 	if !errors.Is(err, ErrLFSMissing) {
 		return reservation, key, version, false, err
 	}
-	if err := s.checkLFSQuota(ctx, repositoryID, object, limits); err != nil {
+	quota, err := s.loadLFSQuota(ctx, repositoryID)
+	if err != nil {
+		return reservation, key, version, false, err
+	}
+	if err := quota.check(object, limits); err != nil {
 		return reservation, key, version, false, err
 	}
 	var token [16]byte
@@ -327,6 +330,9 @@ func (s *Store) reserveLFS(ctx context.Context, repositoryID string, object LFSO
 	reservation = lfsReservation{SchemaVersion: 1, Object: object, Key: "lfs/objects/" + id, CreatedAt: time.Now().UTC()}
 	reservation.ExpiresAt = reservation.CreatedAt.Add(LFSReservationLifetime)
 	key = "repos/" + repositoryID + "/lfs/uploads/" + id + ".json"
+	if err := s.saveLFSQuota(ctx, repositoryID, &quota, true); err != nil {
+		return reservation, key, version, false, err
+	}
 	info, err := s.putLFSJSON(ctx, key, reservation, storage.PutOptions{IfNoneMatch: true})
 	if err != nil {
 		return reservation, key, version, false, err
@@ -355,7 +361,16 @@ func (s *Store) reserveLFS(ctx context.Context, repositoryID string, object LFSO
 		}
 		return reservation, key, version, false, errors.Join(err, abortErr, headErr, deleteErr)
 	}
-	return reservation, key, info.Version, false, nil
+	quota.Reservations[id] = object
+	quota.Bytes += object.Size
+	quota.Objects++
+	err = s.saveLFSQuota(ctx, repositoryID, &quota, false)
+	if err != nil {
+		// No caller has begun streaming parts yet. Recover an ambiguous ledger
+		// version and release this known reservation under the same lock.
+		err = errors.Join(err, s.cleanupLFSInitialization(ctx, repositoryID, key, info.Version, reservation, quota, multipart))
+	}
+	return reservation, key, info.Version, false, err
 }
 
 func (s *Store) putLFSJSON(ctx context.Context, key string, value any, options storage.PutOptions) (storage.ObjectInfo, error) {
@@ -379,6 +394,17 @@ func (s *Store) finishLFS(ctx context.Context, repositoryID, reservationKey stri
 	if err := authorize(ctx); err != nil {
 		return object, false, errors.Join(ErrForbidden, err)
 	}
+	quota, err := s.loadLFSQuota(ctx, repositoryID)
+	if err != nil {
+		return object, false, err
+	}
+	token := strings.TrimPrefix(reservation.Key, "lfs/objects/")
+	if reserved, ok := quota.Reservations[token]; !ok || reserved != reservation.Object {
+		return object, false, ErrCorrupt
+	}
+	if err := s.saveLFSQuota(ctx, repositoryID, &quota, true); err != nil {
+		return object, false, err
+	}
 	info, err = multipart.CompleteMultipart(ctx, "repos/"+repositoryID+"/"+reservation.Key, reservation.UploadID, parts)
 	if err != nil {
 		return object, false, err
@@ -387,6 +413,9 @@ func (s *Store) finishLFS(ctx context.Context, repositoryID, reservationKey stri
 	if info.Size != reservation.Object.Size || info.Version == "" {
 		return object, completed, ErrCorrupt
 	}
+	// The completed payload replaces an equal-sized reservation. Even when
+	// authorization or verified-record publication fails, it remains charged.
+	defer func() { err = errors.Join(err, s.saveLFSQuota(ctx, repositoryID, &quota, false)) }()
 	if err := authorize(ctx); err != nil {
 		return object, completed, errors.Join(ErrForbidden, err)
 	}
@@ -408,11 +437,36 @@ func (s *Store) releaseLFSReservation(ctx context.Context, repositoryID, key str
 		return err
 	}
 	defer func() { err = errors.Join(err, unlock()) }()
-	err = s.objects.Delete(ctx, key, version)
-	if errors.Is(err, storage.ErrNotFound) {
-		return nil
+	quota, err := s.loadLFSQuota(ctx, repositoryID)
+	if err != nil {
+		return err
 	}
-	return err
+	token := strings.TrimSuffix(strings.TrimPrefix(key, "repos/"+repositoryID+"/lfs/uploads/"), ".json")
+	object, ok := quota.Reservations[token]
+	if !ok {
+		_, err := s.objects.Head(ctx, key)
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil // GC already released this reservation.
+		}
+		return errors.Join(ErrCorrupt, err)
+	}
+	if err := s.saveLFSQuota(ctx, repositoryID, &quota, true); err != nil {
+		return err
+	}
+	if err := s.objects.Delete(ctx, key, version); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+	info, err := s.objects.Head(ctx, "repos/"+repositoryID+"/lfs/objects/"+token)
+	if errors.Is(err, storage.ErrNotFound) {
+		quota.Bytes -= object.Size
+		quota.Objects--
+	} else if err != nil {
+		return err
+	} else if info.Size != object.Size || info.Version == "" {
+		return ErrCorrupt
+	}
+	delete(quota.Reservations, token)
+	return s.saveLFSQuota(ctx, repositoryID, &quota, false)
 }
 
 func (s *Store) lfsArtifacts(ctx context.Context, repositoryID string) ([]storage.ObjectInfo, error) {
@@ -424,7 +478,7 @@ func (s *Store) lfsArtifacts(ctx context.Context, repositoryID string) ([]storag
 		if err != nil {
 			return nil, err
 		}
-		if len(result)+len(page.Objects) > 3*maxLFSRecords {
+		if len(result)+len(page.Objects) > 3*maxLFSRecords+1 {
 			return nil, ErrLimit
 		}
 		for _, item := range page.Objects {
@@ -459,77 +513,4 @@ func (s *Store) readLFSReservation(ctx context.Context, repositoryID string, inf
 		return reservation, ErrCorrupt
 	}
 	return reservation, nil
-}
-
-func (s *Store) checkLFSQuota(ctx context.Context, repositoryID string, object LFSObject, limits LFSLimits) error {
-	artifacts, err := s.lfsArtifacts(ctx, repositoryID)
-	if err != nil {
-		return err
-	}
-	var used int64
-	physical := map[string]storage.ObjectInfo{}
-	repositoryPrefix := "repos/" + repositoryID + "/"
-	for _, info := range artifacts {
-		key := strings.TrimPrefix(info.Key, repositoryPrefix)
-		if !strings.HasPrefix(key, "lfs/objects/") {
-			continue
-		}
-		if !validLFSDataKey(key) || info.Size < 0 || info.Version == "" {
-			return ErrCorrupt
-		}
-		if len(physical) >= maxLFSRecords || info.Size > limits.MaxRepositoryBytes-used {
-			return errors.Join(ErrLimit, ErrLFSQuota)
-		}
-		physical[key] = info
-		used += info.Size
-	}
-	count := len(physical)
-	records := 0
-	prefix := "repos/" + repositoryID + "/lfs/"
-	for _, info := range artifacts {
-		key := strings.TrimPrefix(info.Key, prefix)
-		var size int64
-		switch {
-		case strings.HasPrefix(key, "verified/"):
-			oid := strings.TrimSuffix(strings.TrimPrefix(key, "verified/"), ".json")
-			if !ValidLFSOID(oid) || key != "verified/"+oid+".json" {
-				return ErrCorrupt
-			}
-			record, err := s.readLFSRecord(ctx, repositoryID, oid)
-			if err != nil {
-				return err
-			}
-			payload, ok := physical[record.Key]
-			if !ok || payload.Size != record.Object.Size || payload.Version != record.Version {
-				return ErrCorrupt
-			}
-		case strings.HasPrefix(key, "uploads/"):
-			reservation, err := s.readLFSReservation(ctx, repositoryID, info)
-			if err != nil {
-				return err
-			}
-			if reservation.Object.OID == object.OID {
-				return fmt.Errorf("LFS upload for this object is already reserved: %w", ErrConflict)
-			}
-			if payload, ok := physical[reservation.Key]; ok {
-				if payload.Size != reservation.Object.Size {
-					return ErrCorrupt
-				}
-			} else {
-				size = reservation.Object.Size
-				count++
-			}
-		default:
-			continue
-		}
-		records++
-		if count >= maxLFSRecords || records >= 2*maxLFSRecords || size > limits.MaxRepositoryBytes-used {
-			return errors.Join(ErrLimit, ErrLFSQuota)
-		}
-		used += size
-	}
-	if count >= maxLFSRecords || object.Size > limits.MaxRepositoryBytes-used {
-		return errors.Join(ErrLimit, ErrLFSQuota)
-	}
-	return nil
 }

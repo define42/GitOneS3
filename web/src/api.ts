@@ -84,6 +84,14 @@ export interface RepositoryCommit {
   createdAt: string;
   parents: string[];
 }
+export interface RepositoryBrowse {
+  repository: Repository;
+  branches: RepositoryBranch[];
+  tree?: RepositoryTree;
+  blob?: RepositoryBlob;
+  readme?: RepositoryBlob;
+  commits?: RepositoryCommit[];
+}
 export type TokenPermission = "read" | "write";
 export interface AccessToken {
   id: string;

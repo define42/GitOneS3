@@ -67,7 +67,7 @@ func TestLFSUploadAndStreamDownload(t *testing.T) {
 		t.Fatalf("range = %q, %v", partial, err)
 	}
 	before, err := objects.List(t.Context(), "repos/"+metadata.ID+"/lfs/")
-	if err != nil || len(before) != 2 {
+	if err != nil || len(before) != 3 {
 		t.Fatalf("stored LFS objects = %d, %v", len(before), err)
 	}
 	if _, err := store.LFSUpload(t.Context(), "alice", "demo", oid, int64(len(data)), bytes.NewReader(data), lfsLimits(), allowLFS); err != nil {
@@ -118,7 +118,7 @@ func TestLFSUploadRejectsInvalidContentAndReleasesQuota(t *testing.T) {
 				t.Fatalf("invalid upload published = %v", err)
 			}
 			artifacts, err := objects.List(t.Context(), "repos/"+metadata.ID+"/lfs/")
-			if err != nil || len(artifacts) != 0 {
+			if err != nil || len(artifacts) != 1 || artifacts[0].Key != lfsQuotaKey(metadata.ID) {
 				t.Fatalf("failed upload retained quota/artifacts = %v, %v", artifacts, err)
 			}
 			if _, err := store.LFSUpload(t.Context(), "alice", "demo", oid, 5, strings.NewReader("hello"), limits, allowLFS); err != nil {
@@ -177,7 +177,7 @@ func TestLFSUploadFinalAuthorizationAndOrphanCleanup(t *testing.T) {
 				t.Fatalf("orphan cleanup = %+v, %v", report, err)
 			}
 			artifacts, err := objects.List(t.Context(), "repos/"+metadata.ID+"/lfs/")
-			if err != nil || len(artifacts) != 0 {
+			if err != nil || len(artifacts) != 1 || artifacts[0].Key != lfsQuotaKey(metadata.ID) {
 				t.Fatalf("cleanup retained artifacts = %v, %v", artifacts, err)
 			}
 		})
@@ -215,7 +215,7 @@ func TestLFSQuotaIncludesConcurrentReservations(t *testing.T) {
 	report, gcErr := store.GarbageCollect(t.Context(), "alice", "demo", GCOptions{Apply: true, GracePeriod: time.Nanosecond})
 	close(paused.release)
 	uploadErr := <-finished
-	if !errors.Is(quotaErr, ErrLFSQuota) || !errors.Is(duplicateErr, ErrConflict) || gcErr != nil || report.Deleted != 0 || uploadErr != nil {
+	if !errors.Is(quotaErr, ErrLFSQuota) || !errors.Is(duplicateErr, ErrLFSQuota) || gcErr != nil || report.Deleted != 0 || uploadErr != nil {
 		t.Fatalf("quota=%v duplicate=%v gc=%+v/%v first=%v", quotaErr, duplicateErr, report, gcErr, uploadErr)
 	}
 }
@@ -255,7 +255,7 @@ func TestLFSCancelledUploadReleasesReservation(t *testing.T) {
 		t.Fatalf("canceled upload = %v", err)
 	}
 	artifacts, err := objects.List(t.Context(), "repos/"+metadata.ID+"/lfs/")
-	if err != nil || len(artifacts) != 0 {
+	if err != nil || len(artifacts) != 1 || artifacts[0].Key != lfsQuotaKey(metadata.ID) {
 		t.Fatalf("canceled upload retained reservation = %v, %v", artifacts, err)
 	}
 }

@@ -101,6 +101,10 @@ positive and at most 12 hours. Zero queued transfers means immediate rejection
 when busy. Saturation returns HTTP 503. Batch/verify requests have a separate
 bounded control capacity, a 30-second timeout, and a 1 MiB JSON limit; batches
 contain at most 1,000 objects. LFS admission is separate from Git pack admission.
+Each batch resolves repository identity once for its object lookups and checks
+up to eight distinct objects concurrently. Repeated OIDs share a lookup; every
+existing object still requires its verified record and payload size/version
+check. Cancellation stops the batch's workers before releasing control capacity.
 
 Disabling LFS disables its HTTP endpoints; it does not remove stored objects or
 turn off Git pointer integrity enforcement or LFS maintenance. Deploy the same
@@ -111,7 +115,16 @@ Quota is enforced under the durable repository lock. It includes completed
 physical payloads, completed orphan payloads awaiting collection, and durable
 reservations for unfinished uploads, without counting a completed payload twice.
 Each repository is also limited to 100,000 physical objects and unfinished
-reservations combined; quota scans stop at 300,000 LFS storage artifacts.
+reservations combined, including at most 1,024 outstanding reservations.
+Completed history is recorded in durable quota counters, so ordinary uploads
+perform a fixed number of storage operations instead of scanning older objects.
+The reservation map is bounded independently of repository history.
+Concurrent attempts for the same content ID reserve quota separately. Verified
+publication selects one payload; any extra completed payload remains charged
+until GC collects it. If an initialization write has an uncertain result before
+streaming starts, the server attempts to abort that upload and release its
+reservation under the lock. Failed cleanup remains charged or requires ledger
+reconciliation before another upload can be admitted.
 Quota excludes metadata, provider object versions, and Git pack storage. A
 failed multipart abort retains its reservation for recovery. Reservations last
 24 hours and remain charged until cleaned up. Quota exhaustion returns HTTP 507;
@@ -125,7 +138,31 @@ The repository layout adds:
 repos/<repository-id>/lfs/objects/<random-id>       immutable raw bytes
 repos/<repository-id>/lfs/verified/<sha256>.json    verified size and physical object version
 repos/<repository-id>/lfs/uploads/<random-id>.json durable upload reservation
+repos/<repository-id>/lfs/quota.json              physical quota counters and pending reservations
 ```
+
+The quota ledger uses conditional writes under the repository lock. Before an
+upload or collection changes its artifacts, it marks the ledger dirty. A dirty
+ledger cannot admit another upload until a complete reconciliation has counted
+physical payloads and outstanding reservations and validated verified records.
+Failed writes, cancellation, and partial collection therefore preserve charges
+or force reconciliation; they cannot silently release an orphan's quota.
+Ordinary successful uploads do not need reconciliation.
+
+**Upgrade all writers together.** Stop and drain every server and maintenance
+process using the bucket before upgrading or rolling back. Older binaries do
+not maintain the quota ledger and cannot safely run alongside this version.
+Before starting an older version, remove `lfs/quota.json` from every repository
+while all writers remain stopped. This ensures a later upgrade reconciles any
+objects written by that older version instead of trusting stale counters.
+An existing repository without a ledger is migrated under the lock on its first
+new upload or applied GC. That one-time scan can be lengthy; run applied GC
+during the maintenance window to initialize large repositories. Migration and
+repair stop after 300,001 LFS artifacts and fail closed on corrupt records,
+unsupported ledger schemas, storage failures, or more than 1,024 outstanding
+reservations. GC can collect expired legacy reservations before rebuilding the
+ledger. Keep this ledger with the rest of the repository during backup and
+restore; do not edit counters or mutate LFS objects outside GitOne.
 
 Grant the shard credentials multipart upload and abort permissions in addition
 to existing read/list/write/delete permissions. On AWS, upload initiation, part

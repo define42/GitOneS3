@@ -72,6 +72,23 @@ async function mockAPI(
       json = { repositories: [repository], role: "owner", canWrite: true };
     } else if (path === `/api/v1/repos/${namespace}/project`) {
       json = repository;
+    } else if (path === `/api/v1/repos/${namespace}/project/browse`) {
+      const blob = {
+        ref: "main", path: "README.md", commit,
+        content: `# Project\n\nA readable README.\n${"long-code-example-".repeat(20)}\n`,
+        size: 160, binary: false,
+      };
+      json = {
+        repository,
+        branches: [{ name: "main", commit }],
+        ...(url.searchParams.get("path") ? { blob } : {
+          tree: {
+            ref: "main", path: "", commit,
+            entries: [{ name: "README.md", path: "README.md", type: "file", size: 160 }],
+          },
+          readme: blob,
+        }),
+      };
     } else if (path === `/api/v1/repos/${namespace}/project/branches`) {
       json = { branches: [{ name: "main", commit }] };
     } else if (path === `/api/v1/repos/${namespace}/project/tree`) {

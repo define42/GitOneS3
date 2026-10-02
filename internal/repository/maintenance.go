@@ -285,6 +285,10 @@ func (s *Store) GarbageCollect(ctx context.Context, namespace, name string, opti
 	if !options.Apply {
 		return report, nil
 	}
+	quota, err := s.invalidateLFSQuota(ctx, snap.metadata.ID)
+	if err != nil {
+		return report, err
+	}
 	if err := s.abortExpiredLFS(ctx, snap.metadata.ID, expiredLFS); err != nil {
 		return report, err
 	}
@@ -300,7 +304,8 @@ func (s *Store) GarbageCollect(ctx context.Context, namespace, name string, opti
 		report.Deleted++
 		report.DeletedBytes += artifact.Size
 	}
-	return report, nil
+	_, err = s.rebuildLFSQuota(ctx, snap.metadata.ID, quota.version)
+	return report, err
 }
 
 func (s *Store) maintenanceArtifacts(ctx context.Context, repositoryID string) ([]storage.ObjectInfo, error) {
@@ -417,6 +422,9 @@ func (s *Store) verifyMaintenanceSnapshot(ctx context.Context, snap snapshot) (r
 		return report, err
 	}
 	defer func() { err = errors.Join(err, reader.Close()) }()
+	if err := reader.prefetch(ctx, func(string, objectInfo) bool { return true }); err != nil {
+		return report, err
+	}
 	packs := map[string]bool{}
 	lfsPointers := map[string]int64{}
 	for id, info := range snap.manifest.Objects {

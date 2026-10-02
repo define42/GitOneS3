@@ -162,6 +162,103 @@ func TestForwardAndThinDeltas(t *testing.T) {
 	}
 }
 
+func TestDecodePreparesThinBasesAfterChecksum(t *testing.T) {
+	base := Object{Type: "blob", Data: []byte("hello world")}
+	id := objectEntry(base).ID
+	rawID, err := hex.DecodeString(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta := []byte{11, 11, 0x90, 5, 6, ' ', 't', 'h', 'e', 'r', 'e'}
+	for _, thin := range []bool{false, true} {
+		t.Run(fmt.Sprintf("thin=%v", thin), func(t *testing.T) {
+			entries := []fixtureEntry{{kind: 7, prefix: rawID, data: delta}, {kind: 7, prefix: rawID, data: delta}}
+			if !thin {
+				entries = append(entries, fixtureEntry{kind: 3, data: base.Data})
+			}
+			prepared, resolved := 0, 0
+			input := bytes.NewReader(fixturePack(t, entries...))
+			options := DecodeOptions{PrepareBases: func(ctx context.Context, ids []string) error {
+				if input.Len() != 0 || ctx != t.Context() || len(ids) != 1 || ids[0] != id {
+					t.Fatalf("invalid read plan: unread=%d ids=%v", input.Len(), ids)
+				}
+				prepared++
+				return nil
+			}}
+			w, err := Decode(t.Context(), input, testLimits(), func(context.Context, string) (Object, error) {
+				if prepared != 1 {
+					t.Fatal("resolver called before base preparation")
+				}
+				resolved++
+				return base, nil
+			}, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeTestResource(t, w)
+			want := 0
+			if thin {
+				want = 1
+			}
+			if prepared != want || resolved != want {
+				t.Fatalf("prepare=%d resolve=%d, want %d", prepared, resolved, want)
+			}
+			changed := Object{Type: "blob", Data: []byte("hello there")}
+			if got, err := w.Get(t.Context(), objectEntry(changed).ID); err != nil || !bytes.Equal(got.Data, changed.Data) {
+				t.Fatalf("prepared delta result=%q: %v", got.Data, err)
+			}
+		})
+	}
+}
+
+func TestDecodeBasePreparationFailuresCleanWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	base := Object{Type: "blob", Data: []byte("x")}
+	id, err := hex.DecodeString(objectEntry(base).ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := fixturePack(t, fixtureEntry{kind: 7, prefix: id, data: []byte{1, 1, 1, 'y'}})
+	prepareErr := errors.New("prepare failed")
+	for _, test := range []struct {
+		name string
+		want error
+	}{
+		{name: "checksum", want: ErrInvalid},
+		{name: "callback error", want: prepareErr},
+		{name: "callback cancellation", want: context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			data := bytes.Clone(valid)
+			if test.name == "checksum" {
+				data[len(data)-1] ^= 1
+			}
+			prepared, resolved := 0, 0
+			w, err := Decode(ctx, bytes.NewReader(data), testLimits(), func(context.Context, string) (Object, error) {
+				resolved++
+				return base, nil
+			}, DecodeOptions{PrepareBases: func(ctx context.Context, _ []string) error {
+				prepared++
+				if test.name == "callback cancellation" {
+					cancel()
+					return ctx.Err()
+				}
+				return prepareErr
+			}})
+			if w != nil || !errors.Is(err, test.want) || resolved != 0 || (test.name == "checksum" && prepared != 0) {
+				t.Fatalf("preparation failure: workspace=%v error=%v prepare=%d resolve=%d", w, err, prepared, resolved)
+			}
+			files, err := os.ReadDir(dir)
+			if err != nil || len(files) != 0 {
+				t.Fatalf("failed preparation retained workspace: %v %v", files, err)
+			}
+		})
+	}
+}
+
 func TestDecodeLimitsAndCorruption(t *testing.T) {
 	valid := fixturePack(t, fixtureEntry{kind: 3, data: []byte("test data")})
 	tests := []struct {

@@ -4,14 +4,18 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,22 +149,249 @@ func TestPublishPackSupportsLargeRepositoriesAndIndividualObjects(t *testing.T) 
 
 type packReadStore struct {
 	*storage.MemoryStore
-	ranges int
-	packs  int
+	mu         sync.Mutex
+	ranges     int
+	packs      int
+	heads      int
+	rangeBytes int64
+	packBytes  int64
 }
 
 func (s *packReadStore) Get(ctx context.Context, key string) (io.ReadCloser, storage.ObjectInfo, error) {
+	body, info, err := s.MemoryStore.Get(ctx, key)
 	if strings.Contains(key, "/packs/") {
+		s.mu.Lock()
 		s.packs++
+		s.packBytes += info.Size
+		s.mu.Unlock()
 	}
-	return s.MemoryStore.Get(ctx, key)
+	return body, info, err
 }
 
 func (s *packReadStore) GetRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, storage.ObjectInfo, error) {
 	if strings.Contains(key, "/packs/") {
+		s.mu.Lock()
 		s.ranges++
+		s.rangeBytes += length
+		s.mu.Unlock()
 	}
 	return s.MemoryStore.GetRange(ctx, key, offset, length)
+}
+
+func (s *packReadStore) Head(ctx context.Context, key string) (storage.ObjectInfo, error) {
+	if strings.Contains(key, "/packs/") {
+		s.mu.Lock()
+		s.heads++
+		s.mu.Unlock()
+	}
+	return s.MemoryStore.Head(ctx, key)
+}
+
+func newPackedReadFixture(t *testing.T) (*Store, *packReadStore, *GitSnapshot, map[string]GitObject) {
+	t.Helper()
+	objects := &packReadStore{MemoryStore: storage.NewMemoryStore()}
+	store, err := New(objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(t.Context(), "alice", createInput("sparse", false)); err != nil {
+		t.Fatal(err)
+	}
+	base, err := store.ReadGitReferences(t.Context(), "alice", "sparse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := make([]byte, 2<<20)
+	_, _ = rand.NewChaCha8([32]byte{17}).Read(data)
+	blob := GitObject{Type: "blob", Data: data}
+	blobID := GitObjectID(blob)
+	raw, err := hex.DecodeString(blobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := GitObject{Type: "tree", Data: append([]byte("100644 data.bin\x00"), raw...)}
+	treeID := GitObjectID(tree)
+	identity := "author Read <read@example.test> 1 +0000\ncommitter Read <read@example.test> 1 +0000\n"
+	old := GitObject{Type: "commit", Data: []byte("tree " + treeID + "\n" + identity + "\nInitial\n")}
+	oldID := GitObjectID(old)
+	head := GitObject{Type: "commit", Data: []byte("tree " + treeID + "\nparent " + oldID + "\n" + identity + "\nMetadata update\n")}
+	headID := GitObjectID(head)
+	gitObjects := map[string]GitObject{blobID: blob, treeID: tree, oldID: old, headID: head}
+	if err := store.PublishGit(t.Context(), base, []RefUpdate{{Name: "refs/heads/main", New: headID}}, gitObjects, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.ReadGitReferences(t.Context(), "alice", "sparse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects.packs, objects.ranges, objects.heads, objects.packBytes, objects.rangeBytes = 0, 0, 0, 0, 0
+	return store, objects, current, gitObjects
+}
+
+func TestGitReaderSparseMetadataAndDensePackReads(t *testing.T) {
+	t.Parallel()
+	store, objects, base, gitObjects := newPackedReadFixture(t)
+	reader, err := store.OpenGit(t.Context(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closePackedResource(t, reader)
+	if err := reader.Validate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := reader.Reachable(t.Context(), base.References); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id := base.References["refs/heads/main"]
+	head, err := reader.Get(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head.Data[0] ^= 1
+	again, err := reader.Get(t.Context(), id)
+	if err != nil || !bytes.Equal(again.Data, gitObjects[id].Data) {
+		t.Fatalf("caller mutation changed cached metadata: %v", err)
+	}
+	if objects.packs != 0 || objects.heads != 0 || objects.ranges != 3 || objects.rangeBytes > 4096 {
+		t.Fatalf("sparse graph read: packs=%d heads=%d ranges=%d bytes=%d", objects.packs, objects.heads, objects.ranges, objects.rangeBytes)
+	}
+	ids := slices.Sorted(maps.Keys(gitObjects))
+	if err := reader.Prefetch(t.Context(), ids); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		got, err := reader.Get(t.Context(), id)
+		if err != nil || !bytes.Equal(got.Data, gitObjects[id].Data) {
+			t.Fatalf("dense object %s: %v", id, err)
+		}
+	}
+	if objects.packs != 1 || objects.heads != 1 || objects.ranges != 3 {
+		t.Fatalf("dense reads not coalesced: packs=%d heads=%d ranges=%d", objects.packs, objects.heads, objects.ranges)
+	}
+	if err := reader.Prefetch(t.Context(), ids); err != nil || objects.heads != 1 || objects.packs != 1 {
+		t.Fatalf("repeated prefetch reloaded pack: %v heads=%d packs=%d", err, objects.heads, objects.packs)
+	}
+}
+
+func TestGitReaderConcurrentIndependentReaders(t *testing.T) {
+	t.Parallel()
+	store, objects, base, gitObjects := newPackedReadFixture(t)
+	var readers sync.WaitGroup
+	for range 4 {
+		readers.Go(func() {
+			// Each operation owns its snapshot's validation state and caches.
+			snapshot := *base
+			reader, err := store.OpenGit(t.Context(), &snapshot)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer closePackedResource(t, reader)
+			if err := reader.Validate(t.Context()); err != nil {
+				t.Error(err)
+				return
+			}
+			id := snapshot.References["refs/heads/main"]
+			got, err := reader.Get(t.Context(), id)
+			if err != nil || !bytes.Equal(got.Data, gitObjects[id].Data) {
+				t.Errorf("concurrent sparse metadata read: %v", err)
+			}
+		})
+	}
+	readers.Wait()
+	if objects.packs != 0 || objects.ranges != 12 || objects.rangeBytes > 4*4096 {
+		t.Fatalf("concurrent sparse readers loaded pack bodies: packs=%d ranges=%d bytes=%d", objects.packs, objects.ranges, objects.rangeBytes)
+	}
+}
+
+func TestGitReaderMetadataCacheBounds(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		count, bytes int
+	}{
+		{name: "object count", count: 4097, bytes: 1},
+		{name: "decoded bytes", count: 5, bytes: 1 << 20},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, base := transportFixture(t)
+			objects := make(map[string]gitpack.Object, test.count)
+			for index := range test.count {
+				data := append(bytes.Repeat([]byte("x"), test.bytes), fmt.Appendf(nil, "-%d", index)...)
+				id := GitObjectID(GitObject{Type: "tag", Data: data})
+				objects[id] = gitpack.Object{Type: "tag", Data: data}
+			}
+			ids := slices.Sorted(maps.Keys(objects))
+			var pack bytes.Buffer
+			entries, err := gitpack.Write(t.Context(), &pack, ids, func(_ context.Context, id string) (gitpack.Object, error) { return objects[id], nil }, PackLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(pack.Bytes())
+			relative := "packs/" + hex.EncodeToString(digest[:]) + ".pack"
+			if _, err := store.objects.Put(t.Context(), "repos/"+base.original.metadata.ID+"/"+relative, bytes.NewReader(pack.Bytes()), int64(pack.Len()), storage.PutOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			base.original.manifest.Objects = map[string]objectInfo{}
+			for _, entry := range entries {
+				base.original.manifest.Objects[entry.ID] = objectInfo{Type: entry.Type, Size: entry.Size, SHA256: entry.SHA256, PackKey: relative, Offset: entry.Offset, Length: entry.Length, CRC32: entry.CRC32}
+			}
+			reader, err := store.OpenGit(t.Context(), base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closePackedResource(t, reader)
+			if err := reader.Prefetch(t.Context(), ids); err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range ids {
+				got, err := reader.Get(t.Context(), id)
+				if err != nil || !bytes.Equal(got.Data, objects[id].Data) {
+					t.Fatalf("metadata read after cache saturation: %v", err)
+				}
+			}
+			if len(reader.metadata) == 0 || len(reader.metadata) > 4096 || reader.metadataBytes > 4<<20 {
+				t.Fatalf("unbounded metadata cache: objects=%d bytes=%d", len(reader.metadata), reader.metadataBytes)
+			}
+			if err := reader.Close(); err != nil || len(reader.metadata) != 0 || reader.metadataBytes != 0 {
+				t.Fatalf("metadata retained after Close: %v", err)
+			}
+		})
+	}
+}
+
+func TestGitReaderPrefetchRejectsCorruptionAndCancellation(t *testing.T) {
+	t.Parallel()
+	store, objects, base, gitObjects := newPackedReadFixture(t)
+	reader, err := store.OpenGit(t.Context(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closePackedResource(t, reader)
+	ids := slices.Sorted(maps.Keys(gitObjects))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := reader.Prefetch(ctx, ids); !errors.Is(err, context.Canceled) || objects.packs != 0 || objects.heads != 0 {
+		t.Fatalf("cancelled prefetch: %v packs=%d heads=%d", err, objects.packs, objects.heads)
+	}
+	info := base.original.manifest.Objects[base.References["refs/heads/main"]]
+	key := "repos/" + base.original.metadata.ID + "/" + info.PackKey
+	body, _, err := objects.MemoryStore.Get(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(body)
+	if err := errors.Join(err, body.Close()); err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)-1] ^= 1
+	if _, err := objects.Put(t.Context(), key, bytes.NewReader(data), int64(len(data)), storage.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Prefetch(t.Context(), ids); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("dense prefetch accepted corrupt pack trailer: %v", err)
+	}
 }
 
 func TestRepackMigratesLegacyAndBrowserUsesRanges(t *testing.T) {

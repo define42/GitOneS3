@@ -84,7 +84,17 @@ func (h *Handler) receiveStream(ctx context.Context, snap *repository.GitSnapsho
 				return gitpack.Object{}, gitpack.ErrNotFound
 			}
 			return reader.Get(ctx, id)
-		})
+		}, gitpack.DecodeOptions{PrepareBases: func(ctx context.Context, candidates []string) error {
+			// A base can itself be an unresolved incoming delta. Only plan
+			// reads for objects validated as reachable in the pinned snapshot.
+			ids := candidates[:0]
+			for _, id := range candidates {
+				if snap.HasObject(id) {
+					ids = append(ids, id)
+				}
+			}
+			return reader.Prefetch(ctx, ids)
+		}})
 		if err != nil {
 			// Invalid uploads use Git's report-status and never publish refs.
 			return receiveStatus(updates, "invalid pack", "unpack failed"), nil
@@ -157,6 +167,9 @@ func (n *uploadNegotiation) writePack(ctx context.Context, snapshot *repository.
 			}
 		}
 		wanted = filtered
+	}
+	if err := reader.Prefetch(ctx, wanted); err != nil {
+		return err
 	}
 	packWriter := out
 	if n.sideband {
