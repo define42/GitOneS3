@@ -5,7 +5,7 @@ VERSION ?= $(shell git describe --tags --always --dirty)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 COMPOSE := docker compose
 
-.PHONY: all build build-s3check ui ui-check test-ui clean test test-short lint lint-fix fmt audit run run-local stop logs smoke smoke-git
+.PHONY: all build build-s3check ui ui-check test-ui clean test test-integration test-short lint lint-fix fmt audit run run-local stop logs smoke smoke-git
 
 all: lint test build
 
@@ -34,11 +34,17 @@ clean:
 test:
 	$(GO) test -race -coverprofile=coverage.out ./...
 
+# Race instrumentation can exhaust the real 90-second transfer budget for the
+# two 80 MiB native regressions. Run those separately without instrumentation.
+test-integration:
+	$(GO) test -race -tags=integration -shuffle=on -count=1 -timeout=10m -skip '^(TestNativeGitLargeStreamingLifecycle|TestNativeSSHLargeShardPush)$$' ./...
+	$(GO) test -tags=integration -shuffle=on -count=1 -timeout=10m -p=1 -run '^(TestNativeGitLargeStreamingLifecycle|TestNativeSSHLargeShardPush)$$' ./internal/gittransport ./internal/sshserver
+
 test-short:
 	$(GO) test -short ./...
 
 lint:
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
+	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --build-tags integration ./...
 
 
 lint-fix:

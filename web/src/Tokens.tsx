@@ -4,11 +4,11 @@ import type { FormEvent } from "react";
 import { api, errorMessage } from "./api";
 import { SettingsNavigation } from "./SettingsNavigation";
 import { loadSpaces } from "./spaces";
+import { loadRepositoryCatalog, mergeRepositories } from "./repositoryCatalog";
 import type {
   AccessToken,
   CreatedAccessToken,
   Repository,
-  RepositoryList,
   Session,
   TokenPermission,
 } from "./api";
@@ -145,18 +145,22 @@ export function TokensPage({ session }: { session: Session }) {
             .map((space) => space.name),
         ]),
       ];
-      const listings = await Promise.all(
-        namespaces.map((namespace) =>
-          api<RepositoryList>(`/repos/${encodeURIComponent(namespace)}`, {
-            signal: controller.signal,
-          }),
-        ),
+      const listings: Repository[][] = new Array(namespaces.length);
+      let next = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(4, namespaces.length) }, async () => {
+          while (next < namespaces.length) {
+            controller.signal.throwIfAborted();
+            const index = next++;
+            listings[index] = await loadRepositoryCatalog(
+              namespaces[index], controller.signal,
+            );
+          }
+        }),
       );
-      return listings
-        .flatMap((listing) => listing.repositories)
-        .sort((a, b) =>
-          `${a.namespace}/${a.name}`.localeCompare(`${b.namespace}/${b.name}`),
-        );
+      return mergeRepositories([], listings.flat()).sort((a, b) =>
+        `${a.namespace}/${a.name}`.localeCompare(`${b.namespace}/${b.name}`),
+      );
     }
     loadRepositories()
       .then((result) => {
@@ -169,7 +173,10 @@ export function TokensPage({ session }: { session: Session }) {
         );
       })
       .catch((e) => {
-        if (active) setScopeError(errorMessage(e));
+        if (active) {
+          setScopeError(errorMessage(e));
+          controller.abort();
+        }
       });
     return () => {
       active = false;

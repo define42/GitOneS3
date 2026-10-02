@@ -8,9 +8,12 @@ import (
 	"maps"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const maxLFSPointerBytes = 1024
+
+const maxTreeLFSReads = 8
 
 type lfsIndex struct {
 	Version int              `json:"version"`
@@ -30,6 +33,65 @@ func validLFSIndex(index *lfsIndex) bool {
 		}
 	}
 	return true
+}
+
+// treeLFSPointers avoids reading file contents when the published generation
+// has no LFS pointers. Its index is derived from validated blobs at publication
+// and covered by the manifest digest. Older generations without an index and
+// mixed Git/LFS directories still inspect candidates, with bounded concurrency
+// so a directory does not accumulate one storage round trip per small file.
+func (s *Store) treeLFSPointers(
+	ctx context.Context,
+	snap snapshot,
+	entries []treeEntry,
+) (map[string]LFSObject, error) {
+	pointers := map[string]LFSObject{}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if snap.manifest.LFS != nil && len(snap.manifest.LFS.Objects) == 0 {
+		return pointers, nil
+	}
+	ids := []string{}
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		if entry.kind == "blob" && snap.manifest.Objects[entry.id].Size < maxLFSPointerBytes && !seen[entry.id] {
+			ids = append(ids, entry.id)
+			seen[entry.id] = true
+		}
+	}
+	objects := make([]LFSObject, len(ids))
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var workers sync.WaitGroup
+	count := min(maxTreeLFSReads, len(ids))
+	for worker := range count {
+		workers.Go(func() {
+			for index := worker; index < len(ids); index += count {
+				if ctx.Err() != nil {
+					return
+				}
+				content, err := s.object(ctx, snap, ids[index], "blob")
+				if err != nil {
+					cancel(err)
+					return
+				}
+				if object, pointer, err := parseLFSPointer(content); pointer && err == nil {
+					objects[index] = object
+				}
+			}
+		})
+	}
+	workers.Wait()
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	for index, object := range objects {
+		if object.OID != "" {
+			pointers[ids[index]] = object
+		}
+	}
+	return pointers, nil
 }
 
 // parseLFSPointer recognizes the standard small pointer representation. Files

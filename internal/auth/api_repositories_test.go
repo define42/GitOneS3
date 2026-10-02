@@ -3,14 +3,72 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/define42/GitOneS3/internal/repository"
 	"github.com/define42/GitOneS3/internal/storage"
 )
+
+func TestAPIRepositoryPaginationBeyondOneThousand(t *testing.T) {
+	t.Parallel()
+	s := testService(t, 1, storage.NewMemoryStore(), &fakeProvider{}, nil)
+	if err := s.bindUser(t.Context(), "alice", Identity{Subject: "alice-id"}); err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := groupSession(t, s, "alice", "alice-id")
+	check := repositoryRequestChecker(t, s, cookie, csrf)
+	for i := range 1000 {
+		if _, err := s.repositories.Create(t.Context(), "alice", repository.CreateInput{Name: fmt.Sprintf("repo-%04d", i), CreatedBy: "google:alice-id"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check("POST", "/api/v1/repos/alice", `{"name":"repo-1000"}`, 201)
+	after := ""
+	total := 0
+	for {
+		path := "/api/v1/repos/alice"
+		if after != "" {
+			path += "?after=" + url.QueryEscape(after)
+		}
+		response := check("GET", path, "", 200)
+		var page struct {
+			Repositories []repositoryView `json:"repositories"`
+			NextCursor   string           `json:"nextCursor"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Repositories) == 0 || len(page.Repositories) > 50 {
+			t.Fatalf("invalid page length: %d", len(page.Repositories))
+		}
+		for _, repo := range page.Repositories {
+			if repo.Name != fmt.Sprintf("repo-%04d", total) || repo.Role != "owner" || !repo.CanWrite {
+				t.Fatalf("repository %d: %+v", total, repo)
+			}
+			total++
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		if page.NextCursor == after {
+			t.Fatal("pagination did not advance")
+		}
+		after = page.NextCursor
+	}
+	if total != 1001 {
+		t.Fatalf("listed %d repositories, want 1001", total)
+	}
+	check("GET", "/api/v1/repos/alice?after=..%2Fother", "", 400)
+	check("GET", "/api/v1/repos/alice?after=Project", "", 400)
+	check("GET", "/api/v1/repos/alice?limit=0", "", 422)
+	check("GET", "/api/v1/repos/alice?limit=51", "", 422)
+	check("GET", "/api/v1/repos/alice?limit=1", "", 200)
+}
 
 func TestAPIRepositoryPersonalLifecycle(t *testing.T) {
 	t.Parallel()

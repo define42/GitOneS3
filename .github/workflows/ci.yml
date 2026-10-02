@@ -38,6 +38,98 @@ jobs:
       - name: Run unit tests with race detection and coverage
         run: make test GOFLAGS="-mod=readonly -shuffle=on"
 
+      - name: Check reachable dependency vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  integration:
+    name: Git, SSH, LFS, and S3 integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Credentials belong only to this disposable local fixture.
+      AWS_ACCESS_KEY_ID: gitone-ci
+      AWS_SECRET_ACCESS_KEY: gitone-ci-local-fixture-only
+      AWS_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: "true"
+      GITONE_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install and verify native clients
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git git-lfs openssh-client
+          git --version
+          git lfs version
+          ssh -V
+
+      - name: Build the conditional-delete S3 fixture
+        run: docker build -t gitone-ci-minio -f deploy/compose/Dockerfile.minio deploy/compose
+
+      - name: Start isolated S3 storage
+        run: |
+          docker run -d --name gitone-ci-minio \
+            -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" \
+            -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
+            gitone-ci-minio server /data
+          curl --fail --silent --show-error --retry 30 --retry-delay 1 \
+            --retry-all-errors --retry-max-time 60 --max-time 2 \
+            http://127.0.0.1:9000/minio/health/ready
+
+      - name: Run integration race checks and large native transfers
+        run: make test-integration
+
+      - name: Show S3 logs on failure
+        if: failure()
+        run: docker logs gitone-ci-minio
+
+      - name: Remove isolated S3 storage
+        if: always()
+        run: |
+          if docker container inspect gitone-ci-minio > /dev/null 2>&1; then
+            docker rm -f gitone-ci-minio
+          fi
+
+  frontend:
+    name: Frontend build and pagination
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Typecheck and build the frontend
+        run: make ui-check
+
+      - name: Install Chromium for browser regressions
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Check repository pagination in the browser
+        run: npm --prefix web run test:pagination
+
+      - name: Check production frontend dependencies
+        run: npm --prefix web audit --omit=dev
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -58,4 +150,4 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.2
-          args: ./...
+          args: --build-tags integration ./...

@@ -107,8 +107,8 @@ rendering their contents. Browser file editing, renaming, and deletion are not i
 Browsing currently selects branch names (not tags or arbitrary commit IDs).
 History returns at most 100 first-parent commits, directories at most 1,000
 entries, and file previews are bounded to 1 MiB. Binary files are identified
-without rendering their contents. Namespace listings support up to 1,000
-repositories; pagination is not implemented. Login return links are bounded
+without rendering their contents. Namespace listings load 50 repositories at a
+time and offer **Load more repositories** for later pages. Login return links are bounded
 to 1,024 serialized bytes so signed OIDC state stays within its encoding limit.
 
 ## Huma API
@@ -137,13 +137,23 @@ available for existing clients; browser navigation is selected with
 | `POST /api/v1/groups/{name}/invitations/accept` | Accept the current user's invitation |
 | `PUT /api/v1/groups/{name}/members` | Change a role with `{userId, role}` |
 | `DELETE /api/v1/groups/{name}/members` | Remove a member with `{userId}` |
-| `GET /api/v1/repos/{namespace}` | List accessible repositories in a personal or group namespace |
+| `GET /api/v1/repos/{namespace}?after={nextCursor}&limit=50` | List one page of accessible repositories in a personal or group namespace |
 | `POST /api/v1/repos/{namespace}` | Create a private repository; requires namespace write access |
 | `GET /api/v1/repos/{namespace}/{repository}` | Read repository metadata and the caller's access |
 | `GET /api/v1/repos/{namespace}/{repository}/branches` | List published branches |
 | `GET /api/v1/repos/{namespace}/{repository}/tree?ref=main&path=docs` | Browse a directory on a branch |
 | `GET /api/v1/repos/{namespace}/{repository}/blob?ref=main&path=README.md` | Read a file on a branch |
 | `GET /api/v1/repos/{namespace}/{repository}/commits?ref=main` | Read branch commit history |
+
+Repository catalogs default to 50 results per request; `limit` accepts 1–50.
+When a response includes `nextCursor`, pass its repository name in `after` to
+continue. Omit `after` for the first page. Cursors use the ordering of repository
+metadata keys in storage and do not pin a snapshot across concurrent creations.
+Listing reads only metadata, the current state, and refs, with at most eight
+concurrent readers; it does not load Git object manifests. Namespaces can contain
+more than 1,000 repositories. The browser offers **Load more repositories**, and
+its search filters the loaded results. Token scope selection follows all pages
+before presenting the catalog.
 
 Huma validates request bodies and documents their schemas and errors. Signed
 session cookies authenticate requests; mutations also require the configured

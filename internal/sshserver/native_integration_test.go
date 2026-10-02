@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	mathrand "math/rand/v2"
 	"net"
 	"os"
 	"os/exec"
@@ -240,7 +242,12 @@ func nativeSSHNamespace(t *testing.T, router *shard.Router, prefix string, targe
 
 func (f *nativeSSHFixture) git(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	return f.gitWithTimeout(t, 15*time.Second, dir, args...)
+}
+
+func (f *nativeSSHFixture) gitWithTimeout(t *testing.T, timeout time.Duration, dir string, args ...string) (string, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
 	defer cancel()
 	// #nosec G204 -- Native Git receives only test-owned arguments and generated fixture paths.
 	command := exec.CommandContext(ctx, "git", append([]string{
@@ -343,6 +350,61 @@ func TestNativeSSHShardLifecycle(t *testing.T) {
 		t.Fatalf("authority calls reached wrong shards: keys=%v ACLs=%v",
 			fixture.registry.verified, fixture.registry.authorized,
 		)
+	}
+}
+
+// Exercise the encrypted peer connection as well as the Git transport: the
+// adapter-only large-pack test cannot detect a smaller shard-forwarding limit.
+func TestNativeSSHLargeShardPush(t *testing.T) {
+	if testing.Short() {
+		t.Skip("80 MiB native SSH shard-forwarding regression")
+	}
+	for _, command := range []string{"git", "ssh"} {
+		if _, err := exec.LookPath(command); err != nil {
+			t.Skipf("native %s unavailable", command)
+		}
+	}
+	fixture := newNativeSSHFixture(t)
+	run := func(dir string, args ...string) string {
+		t.Helper()
+		// The supported transfer deadline is 90 seconds. Disable client-side
+		// compression so the fixture's random payload exceeds 74 MiB on wire.
+		args = append([]string{"-c", "core.compression=0", "-c", "pack.threads=1"}, args...)
+		output, err := fixture.gitWithTimeout(t, 90*time.Second, dir, args...)
+		if err != nil {
+			t.Fatalf("git %v: %s: %v", args, output, err)
+		}
+		return output
+	}
+	root := t.TempDir()
+	// User authority shard 0, ingress shard 1, and owner shard 2 are distinct.
+	run(root, "clone", fixture.url(1, fixture.registry.group), "source")
+	source := filepath.Join(root, "source")
+	random := mathrand.NewChaCha8([32]byte{42})
+	for i := range 10 {
+		name := filepath.Join(source, fmt.Sprintf("binary-%02d.dat", i))
+		file, err := os.Create(name) // #nosec G304 -- Generated fixture path inside t.TempDir.
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, copyErr := io.CopyN(file, random, 8<<20)
+		if err := errors.Join(copyErr, file.Close()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run(source, "add", ".")
+	run(source, "commit", "-m", "80 MiB cross-shard import")
+	run(source, "push", "origin", "main")
+	want := run(source, "rev-parse", "HEAD")
+	snapshot, err := fixture.stores[2].ReadGitReferences(t.Context(), fixture.registry.group, "demo")
+	if err != nil || snapshot.References["refs/heads/main"] != want {
+		t.Fatalf("large push did not publish on the owner: snapshot=%+v error=%v", snapshot, err)
+	}
+	run(root, "clone", fixture.url(3, fixture.registry.group), "clone")
+	clone := filepath.Join(root, "clone")
+	run(clone, "fsck", "--full", "--strict")
+	if got := run(clone, "rev-parse", "HEAD"); got != want {
+		t.Fatalf("cloned commit = %s, want %s", got, want)
 	}
 }
 
@@ -525,5 +587,92 @@ func TestSSHShutdownClosesIdleConnections(t *testing.T) {
 	}
 	if _, err := client.NewSession(); err == nil {
 		t.Fatal("authenticated connection survived shutdown")
+	}
+}
+
+func TestSSHForwardedCommandLimit(t *testing.T) {
+	t.Parallel()
+	fixture := newNativeSSHFixture(t)
+	before, err := fixture.stores[2].ReadGitReferences(t.Context(), fixture.registry.group, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := fixture.dial(t, fixture.registry.username, fixture.user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close() }()
+	// Every command is individually valid, but 1,001 updates exceed the
+	// owner's command-count limit. The larger forwarding allowance must not
+	// relax that limit or publish a partial set of references.
+	var commands strings.Builder
+	for i := range 1001 {
+		line := strings.Repeat("0", 40) + " " + before.References["refs/heads/main"] +
+			fmt.Sprintf(" refs/heads/limit-%04d", i)
+		if i == 0 {
+			line += "\x00report-status"
+		}
+		line += "\n"
+		fmt.Fprintf(&commands, "%04x%s", len(line)+4, line)
+	}
+	commands.WriteString("0000")
+	session.Stdin = strings.NewReader(commands.String())
+	command := "git-receive-pack '" + fixture.registry.group + "/demo.git'"
+	output, err := session.CombinedOutput(command)
+	exit, ok := errors.AsType[*ssh.ExitError](err)
+	if !ok || exit.ExitStatus() != 1 || !bytes.Contains(output, []byte("GitOne: access denied")) {
+		t.Fatalf("missing rejection for too many forwarded commands: %s: %v", output, err)
+	}
+	if !bytes.Contains(output, []byte("refs/heads/main")) {
+		t.Fatalf("request failed before reaching the owner: %s: %v", output, err)
+	}
+	after, err := fixture.stores[2].ReadGitReferences(t.Context(), fixture.registry.group, "demo")
+	if err != nil || !maps.Equal(after.References, before.References) {
+		t.Fatalf("rejected push changed owner references: snapshot=%+v error=%v", after, err)
+	}
+}
+
+func TestSSHShutdownClosesForwardedSession(t *testing.T) {
+	t.Parallel()
+	fixture := newNativeSSHFixture(t)
+	client, err := fixture.dial(t, fixture.registry.username, fixture.user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close() }()
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stdin.Close() }()
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Start("git-upload-pack '" + fixture.registry.group + "/demo.git'"); err != nil {
+		t.Fatal(err)
+	}
+	// Receiving the advertisement proves the peer has admitted this command.
+	// Keep stdin open without sending negotiation, leaving forwarding blocked.
+	if _, err := bufio.NewReader(stdout).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan struct{})
+	go func() { fixture.stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SSH shutdown did not join blocked forwarding workers")
+	}
+	if err := session.Wait(); err == nil {
+		t.Fatal("incomplete forwarded negotiation succeeded during shutdown")
 	}
 }

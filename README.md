@@ -408,11 +408,13 @@ make test
 make lint
 make ui-check            # TypeScript checks and Vite production build
 make test-ui             # Playwright against a running local Compose stack
+make test-integration    # native Git/SSH/LFS and opt-in S3 integration suites
+npm --prefix web run test:pagination # isolated browser pagination regressions
 go test -tags=integration ./internal/auth -run '^TestGitPAT'  # requires native Git
 go test -race -tags=integration ./internal/lfs ./internal/sshserver -run LFS # requires Git and Git LFS
 ```
 
-Local source builds require Go 1.26+ and Node.js 22.12+ with npm; `make run` builds both
+Local source builds require Go 1.26.8+ and Node.js 22.12+ with npm; `make run` builds both
 inside Docker and needs neither on the host. Direct Go checks remain
 `go test -race ./...` and `go vet ./...`. Run `make ui` before a direct
 `go build ./cmd/gitone` to include the interface. A Go-only build from a fresh
@@ -421,10 +423,24 @@ handlers available. Generated UI files are not committed.
 
 [GitHub Actions CI](.github/workflows/ci.yml) runs on every push and pull request,
 and can also be started manually. Separate jobs run Go unit tests with race
-detection, randomized order, and coverage, and golangci-lint v2.13.2 using
-`.golangci.yml`. Both jobs use the Go version from `go.mod`; neither requires
-Node.js, Docker, or repository secrets. Browser and integration tests remain
-separate from this Go unit-test workflow.
+detection, randomized order, and coverage; golangci-lint v2.13.2 including
+integration test code; native Git/SSH/LFS and S3 integration tests; and the frontend
+build and isolated browser
+pagination regressions. CI also checks reachable Go vulnerabilities and production
+npm dependencies. Go jobs use the version from `go.mod`.
+
+The integration job builds the patched MinIO fixture from `deploy/compose`,
+starts a disposable local instance, and runs `make test-integration`. Tests run
+with race detection except the two 80 MiB native Git/SSH regressions, which run
+separately without instrumentation. Race instrumentation can exhaust their real
+90-second transfer budgets; the production deadlines remain in force for both
+runs. The job needs no repository secrets or existing buckets. To include S3
+tests locally, set `GITONE_TEST_S3_ENDPOINT` and the normal AWS credential
+variables for a test endpoint; the tests create and remove their own random
+buckets. Without an endpoint, S3 tests skip. Native tests require Git, Git LFS,
+and OpenSSH. The full browser OIDC lifecycle suite still runs against Compose
+with `make test-ui`; pagination regressions use mocked API responses and start
+their own local frontend server.
 
 ## Kubernetes
 

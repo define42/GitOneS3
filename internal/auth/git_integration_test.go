@@ -425,7 +425,11 @@ func (c *gitTestCluster) status(t *testing.T, target, username, secret string, w
 	if err != nil {
 		t.Fatal(c.redact(err.Error()))
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Error(c.redact(err.Error()))
+		}
+	}()
 	_, _ = io.Copy(io.Discard, response.Body)
 	if response.StatusCode != want {
 		t.Fatalf("Git discovery: status %d, want %d", response.StatusCode, want)
@@ -473,6 +477,7 @@ func (c *gitTestCluster) gitCommand(t *testing.T, dir, username, secret string, 
 	options := []string{"-c", "credential.helper=", "-c", "credential.helper=" + helper,
 		"-c", "user.name=GitOne Integration", "-c", "user.email=git-test@example.invalid",
 		"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "init.defaultBranch=main"}
+	// #nosec G204 -- gitPath comes from exec.LookPath("git"); arguments are test-owned Git commands and fixture paths.
 	command := exec.CommandContext(ctx, c.gitPath, append(options, args...)...)
 	command.Dir = dir
 	command.WaitDelay = 5 * time.Second
@@ -507,6 +512,7 @@ func gitTestWrite(t *testing.T, path, contents string) {
 
 func gitTestRead(t *testing.T, path string) string {
 	t.Helper()
+	// #nosec G304 -- Callers pass README.md paths within Git workspaces created below t.TempDir.
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

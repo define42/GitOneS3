@@ -12,6 +12,8 @@ import (
 
 type repositoriesInput struct {
 	Namespace string `path:"namespace" minLength:"1" maxLength:"63" pattern:"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"`
+	After     string `query:"after" maxLength:"63" doc:"Repository name from the previous page's nextCursor."`
+	Limit     int    `query:"limit" default:"50" minimum:"1" maximum:"50"`
 }
 
 type createRepositoryInput struct {
@@ -42,6 +44,7 @@ type repositoriesOutput struct {
 		Repositories []repositoryView `json:"repositories"`
 		Role         string           `json:"role" enum:"reader,developer,owner"`
 		CanWrite     bool             `json:"canWrite"`
+		NextCursor   string           `json:"nextCursor,omitempty"`
 	}
 }
 
@@ -105,14 +108,15 @@ func (s *Service) apiRepositories(ctx context.Context, input *repositoriesInput)
 	if err != nil {
 		return nil, err
 	}
-	repositories, err := s.repositories.List(ctx, input.Namespace)
+	page, err := s.repositories.ListRepositoriesPage(ctx, input.Namespace, input.After, input.Limit)
 	if err != nil {
 		return nil, repositoryAPIError(err)
 	}
 	output := &repositoriesOutput{}
 	output.Body.Role, output.Body.CanWrite = role, canWriteRepositories(role)
-	output.Body.Repositories = make([]repositoryView, 0, len(repositories))
-	for _, metadata := range repositories {
+	output.Body.NextCursor = page.NextCursor
+	output.Body.Repositories = make([]repositoryView, 0, len(page.Repositories))
+	for _, metadata := range page.Repositories {
 		output.Body.Repositories = append(output.Body.Repositories, repositoryView{metadata, role, canWriteRepositories(role)})
 	}
 	return output, nil

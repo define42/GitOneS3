@@ -45,6 +45,7 @@ export interface RepositoryList {
   repositories: Repository[];
   role: Role;
   canWrite: boolean;
+  nextCursor?: string;
 }
 export interface RepositoryBranch {
   name: string;

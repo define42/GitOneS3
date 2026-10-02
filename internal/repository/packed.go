@@ -82,7 +82,7 @@ func (s *Store) openGitSnapshot(snap snapshot) (*GitReader, error) {
 
 func (r *GitReader) Close() error {
 	r.closed = true
-	return os.RemoveAll(r.dir)
+	return os.RemoveAll(r.dir) // #nosec G703 -- dir is created by os.MkdirTemp and never comes from repository contents.
 }
 
 func (r *GitReader) Get(ctx context.Context, id string) (gitpack.Object, error) {
@@ -113,7 +113,7 @@ func (r *GitReader) Get(ctx context.Context, id string) (gitpack.Object, error) 
 		data, err := r.store.object(ctx, r.base.original, id, info.Type)
 		return gitpack.Object{Type: info.Type, Data: data}, err
 	}
-	file, err := os.Open(fileName) // #nosec G304 -- Name is generated in our private temporary directory.
+	file, err := os.Open(fileName) // #nosec G304 G703 -- Name is generated in our private temporary directory.
 	if err != nil {
 		return gitpack.Object{}, err
 	}
@@ -151,7 +151,7 @@ func (r *GitReader) cachePack(ctx context.Context, relative string) (string, err
 	keep := false
 	defer func() {
 		if !keep {
-			_ = os.Remove(file.Name())
+			_ = os.Remove(file.Name()) // #nosec G703 -- file was created by os.CreateTemp in our private directory.
 		}
 	}()
 	digest := sha256.New()

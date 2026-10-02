@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api, errorMessage, validRepositoryName } from "./api";
 import { loadSpaces } from "./spaces";
+import { mergeRepositories, repositoryPage } from "./repositoryCatalog";
 import type {
   Repository,
   RepositoryBlob,
@@ -120,20 +121,67 @@ export function RepositoryList({ namespace }: { namespace: string }) {
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState("");
+  const catalogController = useRef<AbortController | null>(null);
+  const catalogCursors = useRef(new Set<string>());
+  const morePending = useRef(false);
   useEffect(() => {
-    let active = true;
+    const controller = new AbortController();
+    catalogController.current = controller;
+    catalogCursors.current = new Set();
+    morePending.current = false;
+    setData(null);
     setError("");
-    api<RepositoryListData>(`/repos/${encodeURIComponent(namespace)}`)
+    setMoreError("");
+    setLoadingMore(false);
+    repositoryPage(namespace, undefined, controller.signal)
       .then((result) => {
-        if (active) setData(result);
+        if (controller.signal.aborted) return;
+        if (result.nextCursor) catalogCursors.current.add(result.nextCursor);
+        setData(result);
       })
       .catch((e) => {
-        if (active) setError(errorMessage(e));
+        if (!controller.signal.aborted) setError(errorMessage(e));
       });
     return () => {
-      active = false;
+      controller.abort();
     };
   }, [namespace, refresh]);
+  async function loadMore() {
+    const controller = catalogController.current;
+    if (
+      !data?.nextCursor || morePending.current || !controller ||
+      controller.signal.aborted
+    ) return;
+    morePending.current = true;
+    setLoadingMore(true);
+    setMoreError("");
+    try {
+      const result = await repositoryPage(
+        namespace, data.nextCursor, controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      if (result.nextCursor && catalogCursors.current.has(result.nextCursor))
+        throw new Error(
+          "Repository listing returned a repeated pagination cursor. Please try again.",
+        );
+      if (result.nextCursor) catalogCursors.current.add(result.nextCursor);
+      setData((current) => ({
+        ...result,
+        repositories: mergeRepositories(
+          current?.repositories ?? [], result.repositories,
+        ),
+      }));
+    } catch (e) {
+      if (!controller.signal.aborted) setMoreError(errorMessage(e));
+    } finally {
+      if (!controller.signal.aborted) {
+        morePending.current = false;
+        setLoadingMore(false);
+      }
+    }
+  }
   const repositories =
     data?.repositories.filter((repo) =>
       `${repo.name} ${repo.description}`
@@ -229,6 +277,23 @@ export function RepositoryList({ namespace }: { namespace: string }) {
                     : "This space has no repositories yet. An owner or developer can create one."}
               </p>
             </div>
+          )}
+          {moreError && <ErrorNotice message={moreError} />}
+          {data.nextCursor && (
+            <>
+              <p className="field-help">
+                Search applies to the repositories loaded so far.
+              </p>
+              <button
+                className="button" disabled={loadingMore} onClick={loadMore}
+              >
+                {loadingMore
+                  ? "Loading repositories…"
+                  : moreError
+                    ? "Retry loading more repositories"
+                    : "Load more repositories"}
+              </button>
+            </>
           )}
           {!data.canWrite && (
             <p className="field-help">

@@ -14,6 +14,11 @@ import (
 const maxNegotiationBytes = 1 << 20
 const maxNegotiationPackets = 20000
 
+// MaxSSHRequestBytes bounds one client's command/negotiation packets plus an
+// incoming pack. SSH shard forwarding must allow the full transport budget;
+// the owning handler additionally enforces each section's individual limit.
+const MaxSSHRequestBytes = maxNegotiationBytes + repository.MaxPackBytes
+
 // SSHRequest describes an already authenticated and authorized Git session.
 // Stream carries Git wire bytes, not SSH framing. Its owner must interrupt
 // blocked I/O when ctx is canceled and enforce a maximum 90-second I/O deadline.

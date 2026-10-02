@@ -245,7 +245,7 @@ func (s *Server) forward(
 	workers.Go(func() {
 		// The outer connection closes after exit-status, unblocking this reader
 		// even when the Git client never sends stdin EOF. Its owner joins us.
-		_, err := io.Copy(stdin, io.LimitReader(channel, 74<<20))
+		_, err := io.Copy(stdin, io.LimitReader(channel, gittransport.MaxSSHRequestBytes))
 		_ = stdin.Close()
 		if err != nil {
 			_ = client.Close()

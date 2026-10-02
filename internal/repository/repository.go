@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -28,7 +27,6 @@ const (
 	maxJSONBytes     = 1 << 20
 	maxManifestBytes = 64 << 20
 	maxObjectBytes   = 1 << 20
-	maxRepositories  = 1000
 	maxObjects       = 100000
 	maxTreeEntries   = 1000
 	maxCommits       = 100
@@ -253,37 +251,6 @@ func (s *Store) Create(ctx context.Context, namespace string, input CreateInput)
 		return Metadata{}, fmt.Errorf("claim repository name: %w", err)
 	}
 	return metadata, nil
-}
-
-func (s *Store) List(ctx context.Context, namespace string) ([]Metadata, error) {
-	if !s.validNamespace(namespace) {
-		return nil, ErrInvalid
-	}
-	prefix := "repositories/" + namespace + "/"
-	objects, err := s.objects.List(ctx, prefix)
-	if err != nil {
-		return nil, fmt.Errorf("list repositories: %w", err)
-	}
-	if len(objects) > maxRepositories {
-		return nil, ErrLimit
-	}
-	result := make([]Metadata, 0, len(objects))
-	for _, object := range objects {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		name := strings.TrimSuffix(strings.TrimPrefix(object.Key, prefix), ".json")
-		if !ValidName(name) || object.Key != metadataKey(namespace, name) {
-			return nil, ErrCorrupt
-		}
-		metadata, err := s.Get(ctx, namespace, name)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, metadata)
-	}
-	slices.SortFunc(result, func(a, b Metadata) int { return strings.Compare(a.Name, b.Name) })
-	return result, nil
 }
 
 func (s *Store) Get(ctx context.Context, namespace, name string) (Metadata, error) {

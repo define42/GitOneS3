@@ -177,6 +177,7 @@ func seedMemoryFixture(t *testing.T, root string) {
 
 func writeProfileFile(t *testing.T, path string, data []byte) {
 	t.Helper()
+	// #nosec G703 -- All callers construct fixed fixture names beneath the parent test's t.TempDir.
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -186,6 +187,7 @@ func measureMemoryWorker(t *testing.T) {
 	t.Helper()
 	root := os.Getenv("GITONE_PROFILE_FIXTURE")
 	scenario := os.Getenv("GITONE_PROFILE_SCENARIO")
+	// #nosec G304 G703 -- The parent test passes its private t.TempDir to this worker through the environment.
 	data, err := os.ReadFile(filepath.Join(root, "fixture.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +310,7 @@ func measureMemoryWorker(t *testing.T) {
 	t.Logf("GITONE_MEMORY %s", encoded)
 }
 
-func profileHTTPRequest(ctx context.Context, client *http.Client, baseURL, root, operation string, index int, fixture memoryFixture) (int64, error) {
+func profileHTTPRequest(ctx context.Context, client *http.Client, baseURL, root, operation string, index int, fixture memoryFixture) (_ int64, resultErr error) {
 	service := upload
 	body := io.Reader(strings.NewReader(pkt("want "+fixture.Head+" side-band-64k\n") + "0000" + pkt("done\n")))
 	if operation == "incremental" {
@@ -316,23 +318,28 @@ func profileHTTPRequest(ctx context.Context, client *http.Client, baseURL, root,
 	}
 	if operation == "push" || operation == "delta-push" {
 		service = receive
+		// #nosec G304 G703 -- Operation is one of the two literals above; root is the parent test's private fixture directory.
 		file, err := os.Open(filepath.Join(root, operation+".bin"))
 		if err != nil {
 			return 0, err
 		}
-		defer file.Close()
+		// The HTTP transport also closes this read-only body. Close again to
+		// cover request construction failures; an already-closed file is benign.
+		defer func() { _ = file.Close() }()
 		body = file
 	}
+	// #nosec G704 -- baseURL comes directly from this test's loopback httptest.Server, never a request or external configuration.
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/perf/repo-%d.git/%s", baseURL, index, service), body)
 	if err != nil {
 		return 0, err
 	}
 	request.Header.Set("Content-Type", "application/x-"+service+"-request")
+	// #nosec G704 -- The request targets the loopback httptest.Server constructed by measureMemoryWorker.
 	response, err := client.Do(request)
 	if err != nil {
 		return 0, err
 	}
-	defer response.Body.Close()
+	defer func() { resultErr = errors.Join(resultErr, response.Body.Close()) }()
 	if response.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("%s: HTTP %d", operation, response.StatusCode)
 	}
@@ -418,7 +425,7 @@ func (s *profileDiskStore) Get(ctx context.Context, key string) (io.ReadCloser, 
 	if err != nil {
 		return nil, storage.ObjectInfo{}, err
 	}
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 -- Repository-generated fixture keys resolve beneath test-owned temporary directories.
 	if err != nil {
 		return nil, storage.ObjectInfo{}, err
 	}
@@ -437,7 +444,7 @@ func (r *profileReadCloser) Read(buffer []byte) (int, error) {
 	return n, err
 }
 
-func (s *profileDiskStore) Put(ctx context.Context, key string, body io.Reader, size int64, options storage.PutOptions) (storage.ObjectInfo, error) {
+func (s *profileDiskStore) Put(ctx context.Context, key string, body io.Reader, size int64, options storage.PutOptions) (_ storage.ObjectInfo, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return storage.ObjectInfo{}, err
 	}
@@ -465,7 +472,12 @@ func (s *profileDiskStore) Put(ctx context.Context, key string, body io.Reader, 
 	if err != nil {
 		return storage.ObjectInfo{}, err
 	}
-	defer os.Remove(file.Name())
+	defer func() {
+		// A successful rename has already removed the temporary name.
+		if err := os.Remove(file.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	hash := sha256.New()
 	n, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(body, size+1))
 	closeErr := file.Close()

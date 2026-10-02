@@ -306,6 +306,10 @@ func (s *Store) Tree(ctx context.Context, namespace, name, ref, path string) (Tr
 	if err != nil {
 		return Tree{}, err
 	}
+	pointers, err := s.treeLFSPointers(ctx, snap, entries)
+	if err != nil {
+		return Tree{}, err
+	}
 	for _, entry := range entries {
 		childPath := entry.name
 		if path != "" {
@@ -320,14 +324,8 @@ func (s *Store) Tree(ctx context.Context, namespace, name, ref, path string) (Tr
 			kind, size = "submodule", 0
 		}
 		child := Entry{Name: entry.name, Path: childPath, Type: kind, Size: size}
-		if entry.kind == "blob" && size < maxLFSPointerBytes {
-			content, err := s.object(ctx, snap, entry.id, "blob")
-			if err != nil {
-				return Tree{}, err
-			}
-			if object, pointer, err := parseLFSPointer(content); pointer && err == nil {
-				child.LFS, child.Size = &object, object.Size
-			}
+		if object, ok := pointers[entry.id]; ok {
+			child.LFS, child.Size = &object, object.Size
 		}
 		result.Entries = append(result.Entries, child)
 	}
