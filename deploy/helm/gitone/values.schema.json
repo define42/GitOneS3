@@ -194,7 +194,16 @@
         "maxDepth": {"type": "integer", "minimum": 2}
       }
     },
-    "cache": {"$ref": "#/definitions/emptyDir"},
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["memoryBytes", "diskBytes", "sizeLimit"],
+      "properties": {
+        "memoryBytes": {"type": "string", "pattern": "^[0-9]+(B|KiB|MiB|GiB|TiB|PiB)?$", "description": "Shared memory cache byte budget; zero disables it."},
+        "diskBytes": {"type": "string", "pattern": "^[0-9]+(B|KiB|MiB|GiB|TiB|PiB)?$", "description": "Shared disk cache byte budget; zero disables it. Keep below sizeLimit with filesystem headroom."},
+        "sizeLimit": {"type": "string", "minLength": 1}
+      }
+    },
     "workspace": {"$ref": "#/definitions/emptyDir"},
     "resources": {"type": "object"},
     "podSecurityContext": {"type": "object"},

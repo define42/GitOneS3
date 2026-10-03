@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/define42/GitOneS3/internal/cache"
 	"github.com/define42/GitOneS3/internal/gitpack"
 	"github.com/define42/GitOneS3/internal/storage"
 )
@@ -53,7 +54,8 @@ const (
 // GitReader pins one published manifest. Sparse reads verify individual pack
 // entries; Prefetch caches densely requested packs on temporary disk. Decoded
 // metadata has a separate bounded cache. The reader is local to one operation,
-// is not safe for concurrent use, and releases its caches when closed.
+// is not safe for concurrent use, and releases temporary files and shared-cache
+// pins when closed. Shared immutable entries remain available to later readers.
 type GitReader struct {
 	store         *Store
 	base          *GitSnapshot
@@ -64,6 +66,8 @@ type GitReader struct {
 	metadata      map[string]gitpack.Object
 	metadataBytes int
 	closed        bool
+	sharedPacks   map[string]*cache.File
+	graph         *validatedGraph
 }
 
 func (s *Store) OpenGit(_ context.Context, base *GitSnapshot) (*GitReader, error) {
@@ -89,17 +93,27 @@ func (s *Store) openGitSnapshot(snap snapshot) (*GitReader, error) {
 	return &GitReader{
 		store: s, base: &GitSnapshot{DefaultBranch: snap.metadata.DefaultBranch, References: snap.refs.Refs, original: snap},
 		dir: dir, cached: map[string]string{}, packSizes: map[string]int64{}, metadata: map[string]gitpack.Object{},
+		sharedPacks: map[string]*cache.File{},
 	}, nil
 }
 
 func (r *GitReader) Close() error {
+	if r.closed {
+		return nil
+	}
 	r.closed = true
+	var closeErr error
+	for _, file := range r.sharedPacks {
+		closeErr = errors.Join(closeErr, file.Close())
+	}
+	r.sharedPacks = nil
+	r.graph = nil
 	r.cached = nil
 	r.packSizes = nil
 	r.cacheBytes = 0
 	r.metadata = nil
 	r.metadataBytes = 0
-	return os.RemoveAll(r.dir) // #nosec G703 -- dir is created by os.MkdirTemp and never comes from repository contents.
+	return errors.Join(closeErr, os.RemoveAll(r.dir)) // #nosec G703 -- dir is created by os.MkdirTemp and never comes from repository contents.
 }
 
 func (r *GitReader) Get(ctx context.Context, id string) (gitpack.Object, error) {
@@ -119,6 +133,13 @@ func (r *GitReader) Get(ctx context.Context, id string) (gitpack.Object, error) 
 	}
 	if !validObjectInfo(id, info) {
 		return gitpack.Object{}, ErrCorrupt
+	}
+	if file := r.sharedPacks[info.PackKey]; file != nil {
+		object, err := gitpack.DecodeEntry(ctx, io.NewSectionReader(file, info.Offset, info.Length), packEntry(id, info), MaxGitObjectBytes)
+		if err != nil {
+			return gitpack.Object{}, errors.Join(ErrCorrupt, err)
+		}
+		return r.rememberMetadata(id, object), nil
 	}
 	fileName := r.cached[info.PackKey]
 	if fileName == "" {
@@ -211,6 +232,18 @@ func (r *GitReader) cachePack(ctx context.Context, relative string, selected int
 	if name, ok := r.cached[relative]; ok {
 		return name, nil
 	}
+	if r.sharedPacks[relative] != nil {
+		return "", nil
+	}
+	if r.store.cache != nil {
+		shared, err := r.loadSharedPack(ctx, relative, selected)
+		if err != nil {
+			return "", err
+		}
+		if shared {
+			return "", nil
+		}
+	}
 	key := "repos/" + r.base.original.metadata.ID + "/" + relative
 	size, ok := r.packSizes[relative]
 	if !ok {
@@ -277,6 +310,10 @@ type gitGetter func(context.Context, string) (GitObject, error)
 // walkObjects validates typed connectivity with bounded graph metadata. Blobs
 // have no links; their body checksums are verified when decoded or transferred.
 func walkObjects(ctx context.Context, refs map[string]string, infos map[string]objectInfo, get gitGetter) (map[string]objectInfo, error) {
+	return walkObjectsIndexed(ctx, refs, infos, get, nil)
+}
+
+func walkObjectsIndexed(ctx context.Context, refs map[string]string, infos map[string]objectInfo, get gitGetter, record func(string, []objectLink)) (map[string]objectInfo, error) {
 	queue := make([]objectLink, 0, len(refs))
 	scheduled := make(map[string]bool)
 	enqueue := func(link objectLink) error {
@@ -340,6 +377,9 @@ func walkObjects(ctx context.Context, refs map[string]string, infos map[string]o
 		if err != nil {
 			return nil, err
 		}
+		if record != nil {
+			record(link.id, links)
+		}
 		for _, link := range links {
 			if err := enqueue(link); err != nil {
 				return nil, err
@@ -357,6 +397,9 @@ func (r *GitReader) object(ctx context.Context, id string) (GitObject, error) {
 // Validate checks the published graph before accepting client have IDs. Orphan
 // manifest entries must never be treated as client/server common history.
 func (r *GitReader) Validate(ctx context.Context) error {
+	if r.store.cache != nil {
+		return r.validateCachedGraph(ctx)
+	}
 	if err := r.prefetch(ctx, func(_ string, info objectInfo) bool { return info.Type != "blob" }); err != nil {
 		return err
 	}
@@ -378,6 +421,9 @@ func (s *GitSnapshot) HasObject(id string) bool {
 }
 
 func (r *GitReader) Reachable(ctx context.Context, refs map[string]string) ([]string, error) {
+	if r.graph != nil && r.graph.links != nil {
+		return r.cachedReachable(ctx, refs)
+	}
 	objects, err := walkObjects(ctx, refs, r.base.available, r.object)
 	if err != nil {
 		return nil, err
@@ -612,6 +658,7 @@ func (s *Store) storePack(ctx context.Context, repositoryID string, ids []string
 // Repack migrates loose objects and consolidates the current reachable graph
 // into one immutable pack, then atomically publishes a new generation.
 func (s *Store) Repack(ctx context.Context, namespace, name string) error {
+	s = s.withoutCache()
 	base, err := s.ReadGitReferences(ctx, namespace, name)
 	if err != nil {
 		return err

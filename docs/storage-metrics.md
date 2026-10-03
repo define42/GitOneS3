@@ -79,6 +79,31 @@ assembly and does not count the same payload again. LFS downloads use `get` or
 initialization and part transfers can succeed even when a later hash check or
 authorization check rejects the overall LFS upload.
 
+## Cache metrics
+
+The same authenticated response also includes the shared serving cache:
+
+| Metric | Meaning |
+| --- | --- |
+| `gitone_cache_memory_hits_total`, `gitone_cache_memory_misses_total` | Memory lookup outcomes |
+| `gitone_cache_disk_hits_total`, `gitone_cache_disk_misses_total` | Disk lookup outcomes |
+| `gitone_cache_memory_evictions_total`, `gitone_cache_disk_evictions_total` | Entries removed to make space |
+| `gitone_cache_coalesced_total` | Calls that shared an in-flight fill |
+| `gitone_cache_fill_errors_total` | Failed cache fills |
+| `gitone_cache_corruptions_total` | Corrupt local disk entries detected |
+| `gitone_cache_memory_bytes`, `gitone_cache_disk_bytes` | Accounted retained memory and disk bytes |
+| `gitone_cache_memory_entries`, `gitone_cache_disk_entries` | Retained entries |
+| `gitone_cache_memory_fills`, `gitone_cache_disk_fills` | Fills in progress |
+| `gitone_cache_disk_pins` | Active file handles that prevent eviction |
+
+Cache metrics have no repository, user, key, or storage-namespace labels.
+Storage counters still measure calls reaching the underlying store; cache hits
+can avoid those calls. Cache byte accounting is separate from container RSS and
+filesystem page cache. Compare cold and warm runs using both metric families;
+a high hit ratio does not measure current backend integrity. See
+[cache sizing and integrity behavior](git-performance.md#shared-serving-cache).
+
+
 ## Example alerts and queries
 
 Unexpected backend failures over five minutes:

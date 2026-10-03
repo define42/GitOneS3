@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/define42/GitOneS3/internal/cache"
 	"github.com/define42/GitOneS3/internal/metrics"
 	"github.com/define42/GitOneS3/internal/storage"
 )
@@ -72,6 +73,58 @@ func TestWithMetrics(t *testing.T) {
 			}
 			if strings.Contains(response.Body.String(), token) {
 				t.Fatal("response discloses token")
+			}
+		})
+	}
+}
+
+func TestCacheMetricsShareAuthenticationAndHTTPContract(t *testing.T) {
+	t.Parallel()
+	const token = "secret-metrics-token-for-tests-123456"
+	shared, err := cache.New(cache.Options{MemoryBytes: 1024, Namespace: "metrics-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := shared.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	objects, err := metrics.NewStore(storage.NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, method, token, header string
+		status                      int
+		body                        bool
+	}{
+		{name: "authorized", method: "GET", token: token, header: "Bearer " + token, status: 200, body: true},
+		{name: "unauthorized", method: "GET", token: token, status: 401},
+		{name: "disabled", method: "GET", status: 404},
+		{name: "head", method: "HEAD", token: token, header: "Bearer " + token, status: 200},
+		{name: "wrong method", method: "POST", token: token, header: "Bearer " + token, status: 405},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			request := httptest.NewRequestWithContext(t.Context(), test.method, "/system/metrics", nil)
+			request.Header.Set("Authorization", test.header)
+			response := httptest.NewRecorder()
+			handler := withMetrics(http.NotFoundHandler(), withCacheMetrics(objects, shared), test.token)
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d", response.Code, test.status)
+			}
+			for _, metric := range []string{"gitone_storage_operations_total", "gitone_cache_"} {
+				if strings.Contains(response.Body.String(), metric) != test.body {
+					t.Fatalf("unexpected %s exposition: %s", metric, response.Body)
+				}
+			}
+			if test.status == http.StatusOK && response.Header().Get("Content-Type") != "text/plain; version=0.0.4; charset=utf-8" {
+				t.Fatal("metrics content type changed")
+			}
+			if test.method == "HEAD" && response.Body.Len() != 0 {
+				t.Fatal("HEAD returned a metrics body")
 			}
 		})
 	}

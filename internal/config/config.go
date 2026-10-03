@@ -66,6 +66,7 @@ type Config struct {
 	SSH                 SSH
 	Git                 Git
 	LFS                 LFS
+	Cache               Cache
 }
 
 // Git bounds active and queued Smart HTTP and SSH work per shard process.
@@ -215,12 +216,17 @@ func Load(lookup LookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cache, err := loadCache(lookup)
+	if err != nil {
+		return Config{}, err
+	}
 	metricsToken, _ := lookup("GITONE_METRICS_TOKEN")
 	cfg := Config{
 		Auth:                auth,
 		SSH:                 ssh,
 		Git:                 git,
 		LFS:                 lfs,
+		Cache:               cache,
 		ShardCount:          shardCount,
 		LocalShard:          localShard,
 		ListenAddress:       value(lookup, "GITONE_LISTEN_ADDRESS", DefaultListenAddress),
@@ -284,6 +290,9 @@ func loadGit(lookup LookupEnv) (Git, error) {
 
 // Validate checks invariants that must hold before the process accepts traffic.
 func (c Config) Validate() error {
+	if err := c.Cache.validate(); err != nil {
+		return err
+	}
 	if err := c.LFS.validate(); err != nil {
 		return err
 	}

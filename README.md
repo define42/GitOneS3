@@ -152,6 +152,9 @@ from the mounted cluster identity.
 | `GITONE_GIT_MAX_CONCURRENT_OPERATIONS` | `1` | Shared active Git operations per shard process; 1–32 |
 | `GITONE_GIT_MAX_QUEUED_OPERATIONS` | `4` | Waiting Git operations per shard process; 0–1024, zero disables waiting |
 | `GITONE_GIT_QUEUE_TIMEOUT` | `5s` | Maximum admission wait; positive Go duration up to `90s` |
+| `GITONE_CACHE_MEMORY_BYTES` | `256MiB` | Shared verified immutable repository memory cache; zero disables it |
+| `GITONE_CACHE_DISK_BYTES` | `0` | Shared verified immutable repository disk cache; zero disables it |
+| `GITONE_CACHE_DIRECTORY` | unset | Absolute writable cache directory, required for a positive disk budget |
 | `GITONE_PATH_MAX_TOP_LEVEL_LENGTH` | `63` | Maximum permanent namespace-key length |
 | `GITONE_PATH_MAX_COMPONENT_LENGTH` | `255` | Maximum decoded path-component length |
 | `GITONE_PATH_MAX_DEPTH` | `32` | Maximum namespace/repository path depth |
@@ -185,6 +188,15 @@ hard container-memory guarantee. See [Git admission and limits](docs/git-authent
 and [performance measurements](docs/git-performance.md). Use the
 [deployment qualification procedure](docs/production-qualification.md) to check
 S3 load, capacity limits, recovery, and backups before rollout.
+
+Git and browser reads share a bounded cache of verified immutable repository
+content. Current repository state and authorization remain fresh. Helm enables
+a 256 MiB memory cache and a 16 GiB disk cache inside its 20 GiB cache volume;
+direct binaries and Compose default to memory caching only. Cache budgets are
+per process and are additional to active-operation memory and temporary files.
+Maintenance commands read the authoritative store without the serving cache.
+See [cache sizing and integrity behavior](docs/git-performance.md#shared-serving-cache)
+before raising budgets or concurrency.
 
 HTTP request bodies have a 30-second read deadline, including bodies on health,
 authentication, and rejected requests. Git handlers use their existing 90-second

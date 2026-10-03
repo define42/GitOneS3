@@ -138,6 +138,12 @@ spec:
             {{- end }}
             - name: TMPDIR
               value: /var/lib/gitone/work
+            - name: GITONE_CACHE_MEMORY_BYTES
+              value: {{ .Values.cache.memoryBytes | quote }}
+            - name: GITONE_CACHE_DISK_BYTES
+              value: {{ .Values.cache.diskBytes | quote }}
+            - name: GITONE_CACHE_DIRECTORY
+              value: /var/cache/gitone
             - name: GITONE_SHARD_COUNT
               value: {{ .Values.shardCount | quote }}
             - name: POD_NAME

@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/define42/GitOneS3/internal/cache"
 	"github.com/define42/GitOneS3/internal/gitpack"
 	"github.com/define42/GitOneS3/internal/repository"
 )
@@ -146,15 +147,15 @@ func publicationStatus(updates []repository.RefUpdate, err error) []byte {
 	return receiveStatus(updates, "ok", reason)
 }
 
-func (n *uploadNegotiation) writePack(ctx context.Context, snapshot *repository.GitSnapshot, reader *repository.GitReader, out io.Writer) error {
+func (n *uploadNegotiation) packObjects(ctx context.Context, reader *repository.GitReader) ([]string, error) {
 	wanted, err := reader.Reachable(ctx, n.wants)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(n.haves) != 0 {
 		known, err := reader.Reachable(ctx, n.haves)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		omit := make(map[string]bool, len(known))
 		for _, id := range known {
@@ -168,14 +169,31 @@ func (n *uploadNegotiation) writePack(ctx context.Context, snapshot *repository.
 		}
 		wanted = filtered
 	}
-	if err := reader.Prefetch(ctx, wanted); err != nil {
+	return wanted, nil
+}
+
+func (n *uploadNegotiation) writePack(ctx context.Context, reader *repository.GitReader, shared *cache.Cache, out io.Writer) (err error) {
+	wanted, err := n.packObjects(ctx, reader)
+	if err != nil {
 		return err
 	}
+	file, err := n.cachedPack(ctx, reader, shared, wanted)
+	if err != nil {
+		return err
+	}
+	if file != nil {
+		defer func() { err = errors.Join(err, file.Close()) }()
+		return copyPack(ctx, out, file, n.sideband)
+	}
+	return n.writeSelectedPack(ctx, reader, wanted, out)
+}
+
+func (n *uploadNegotiation) writeSelectedPack(ctx context.Context, reader *repository.GitReader, wanted []string, out io.Writer) error {
 	packWriter := out
 	if n.sideband {
 		packWriter = sidebandWriter{out}
 	}
-	if _, err := gitpack.Write(ctx, packWriter, wanted, reader.Get, repository.PackLimits()); err != nil {
+	if err := writeRawPack(ctx, reader, wanted, packWriter); err != nil {
 		return err
 	}
 	if n.sideband {
@@ -199,10 +217,10 @@ func (w sidebandWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// prepareUpload validates the bounded HTTP negotiation. A disk file carries the
-// response so corruption and missing objects are reported before HTTP headers;
-// the complete pack is never buffered in RAM.
-func (h *Handler) prepareUpload(ctx context.Context, snapshot *repository.GitSnapshot, body []byte) (_ *os.File, err error) {
+// prepareUpload validates the bounded HTTP negotiation and prepares the entire
+// pack before HTTP headers. A pinned shared pack can be framed directly while
+// sending; uncached requests retain a private, fully framed temporary response.
+func (h *Handler) prepareUpload(ctx context.Context, snapshot *repository.GitSnapshot, body []byte) (_ *uploadResponse, err error) {
 	if len(body) > maxNegotiationBytes {
 		return nil, repository.ErrLimit
 	}
@@ -210,11 +228,11 @@ func (h *Handler) prepareUpload(ctx context.Context, snapshot *repository.GitSna
 	if err != nil {
 		return nil, err
 	}
-	var file *os.File
+	var response *uploadResponse
 	defer func() {
 		err = errors.Join(err, reader.Close())
-		if err != nil && file != nil {
-			err = errors.Join(err, file.Close(), os.Remove(file.Name()))
+		if err != nil && response != nil {
+			err = errors.Join(err, response.Close())
 		}
 	}()
 	if err := reader.Validate(ctx); err != nil {
@@ -224,22 +242,38 @@ func (h *Handler) prepareUpload(ctx context.Context, snapshot *repository.GitSna
 	if err != nil {
 		return nil, err
 	}
-	file, err = os.CreateTemp("", "gitone-fetch-*")
+	var wanted []string
+	if done {
+		wanted, err = n.packObjects(ctx, reader)
+		if err != nil {
+			return nil, err
+		}
+		cached, err := n.cachedPack(ctx, reader, h.store.SharedCache(), wanted)
+		if err != nil {
+			return nil, err
+		}
+		if cached != nil {
+			response = &uploadResponse{body: cached, prelude: prelude, sideband: n.sideband}
+			return response, nil
+		}
+	}
+	file, err := os.CreateTemp("", "gitone-fetch-*")
 	if err != nil {
 		return nil, err
 	}
+	response = &uploadResponse{body: file, remove: file.Name()}
 	if err := writeSSH(file, prelude); err != nil {
 		return nil, err
 	}
 	if done {
-		if err := n.writePack(ctx, snapshot, reader, file); err != nil {
+		if err := n.writeSelectedPack(ctx, reader, wanted, file); err != nil {
 			return nil, err
 		}
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
-	return file, nil
+	return response, nil
 }
 
 func parseUpload(ctx context.Context, snapshot *repository.GitSnapshot, body []byte) (*uploadNegotiation, []byte, bool, error) {

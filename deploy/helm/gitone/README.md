@@ -41,6 +41,22 @@ Use each pod's headless-Service address so counters stay associated with one
 shard. See [storage metrics](../../../docs/storage-metrics.md) for Prometheus
 configuration, metric names, and alert examples.
 
+## Shared repository cache
+
+`cache.memoryBytes` defaults to `256MiB`; `cache.diskBytes` defaults to `16GiB`.
+The chart mounts the disk cache at `/var/cache/gitone` in an `emptyDir` with
+`cache.sizeLimit: 20Gi`. Keep the byte budget below the volume limit with space
+for filesystem overhead, and include retained memory plus page cache in the
+pod's memory limit. These budgets apply to each shard pod, not each physical
+node. Zero disables a tier independently; quote `"0"` in values files.
+
+The cache is shared by Git and browser reads. It retains verified immutable
+content while mutable state and permission checks continue to use S3. It is
+disposable: replacing a pod loses its `emptyDir` and causes cold reads. It does
+not change the immutable cluster identity or require an S3 migration.
+Cache metrics use the existing authenticated `/system/metrics` endpoint.
+See [cache sizing and integrity behavior](../../../docs/git-performance.md#shared-serving-cache).
+
 ## Git LFS
 
 LFS is enabled with authentication by default. The `lfs` values configure a

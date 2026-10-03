@@ -11,7 +11,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -138,19 +137,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid negotiation", http.StatusBadRequest)
 			return
 		}
-		file, prepareErr := h.prepareUpload(ctx, snapshot, body)
+		response, prepareErr := h.prepareUpload(ctx, snapshot, body)
 		if prepareErr != nil {
 			http.Error(w, "invalid or unavailable Git objects", http.StatusBadRequest)
 			return
 		}
 		defer func() {
-			// #nosec G703 -- prepareUpload creates this file with os.CreateTemp; its name is never supplied by the request.
-			if err := errors.Join(file.Close(), os.Remove(file.Name())); err != nil {
+			if err := response.Close(); err != nil {
 				slog.WarnContext(ctx, "remove fetch workspace", "error", err)
 			}
 		}()
 		w.Header().Set("Content-Type", "application/x-"+service+"-result")
-		if _, err := io.Copy(w, file); err != nil {
+		if err := response.write(ctx, w); err != nil {
 			return
 		}
 		return

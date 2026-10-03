@@ -12,15 +12,38 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/define42/GitOneS3/internal/cache"
 	"github.com/define42/GitOneS3/internal/repository"
 	"github.com/define42/GitOneS3/internal/storage"
 )
 
 func TestNativeGitLifecycle(t *testing.T) {
+	runNativeGitLifecycle(t, false)
+}
+
+func TestNativeGitCachedLifecycle(t *testing.T) {
+	runNativeGitLifecycle(t, true)
+}
+
+func runNativeGitLifecycle(t *testing.T, cached bool) {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("native git unavailable")
 	}
-	store, err := repository.New(storage.NewMemoryStore())
+	var options []repository.Option
+	if cached {
+		shared, err := cache.New(cache.Options{MemoryBytes: 32 << 20, DiskBytes: 4 << 30, Directory: t.TempDir(), Namespace: t.Name()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := shared.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		options = append(options, repository.WithCache(shared))
+	}
+	store, err := repository.New(storage.NewMemoryStore(), options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,6 +76,10 @@ func TestNativeGitLifecycle(t *testing.T) {
 		return strings.TrimSpace(string(output))
 	}
 	run(root, "clone", server.URL+"/alice/demo.git", "one")
+	if cached {
+		run(root, "clone", server.URL+"/alice/demo.git", "warm-copy")
+		run(filepath.Join(root, "warm-copy"), "fsck", "--full", "--strict")
+	}
 	one := filepath.Join(root, "one")
 	if got := run(one, "show", "HEAD:README.md"); got != "# demo" {
 		t.Fatalf("README = %q", got)

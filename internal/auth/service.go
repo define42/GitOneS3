@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/securecookie"
 
 	"github.com/define42/GitOneS3/internal/authz"
+	"github.com/define42/GitOneS3/internal/cache"
 	"github.com/define42/GitOneS3/internal/config"
 	"github.com/define42/GitOneS3/internal/repository"
 	"github.com/define42/GitOneS3/internal/shard"
@@ -76,6 +77,7 @@ type Options struct {
 	LocalShard         shard.ShardID
 	Router             *shard.Router
 	Store              storage.ObjectStore
+	RepositoryCache    *cache.Cache
 	Provider           Provider
 	Next               http.Handler
 	TokenResolver      TokenResolver
@@ -126,7 +128,7 @@ func New(options Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	repositories, err := repository.New(options.Store)
+	repositories, err := repository.New(options.Store, repository.WithCache(options.RepositoryCache))
 	if err != nil {
 		return nil, err
 	}

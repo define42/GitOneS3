@@ -17,8 +17,6 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/define42/GitOneS3/internal/gitpack"
 )
 
 func (s *Store) initializeReadme(ctx context.Context, metadata Metadata, input CreateInput, manifest *objectManifest) (string, error) {
@@ -87,21 +85,63 @@ func (s *Store) putSnapshot(ctx context.Context, repositoryID, kind string, valu
 }
 
 func (s *Store) readSnapshot(ctx context.Context, repositoryID, relative string, target any) error {
+	if refs, ok := target.(*refsSnapshot); ok && s.cache != nil {
+		value, err := s.cache.LoadMemory(ctx, "decoded-refs:"+snapshotCacheKey(repositoryID, relative), func(ctx context.Context) (any, int64, error) {
+			var result refsSnapshot
+			if err := s.readSnapshotLimit(ctx, repositoryID, relative, &result, maxJSONBytes); err != nil {
+				return nil, 0, err
+			}
+			if result.SchemaVersion != 1 || result.Refs == nil || len(result.Refs) > maxObjects {
+				return nil, 0, ErrCorrupt
+			}
+			size := int64(128)
+			for ref, id := range result.Refs {
+				if !ValidRef(ref) || !objectIDPattern.MatchString(id) {
+					return nil, 0, ErrCorrupt
+				}
+				size += int64(128 + len(ref) + len(id))
+			}
+			return result, size, nil
+		})
+		if err != nil {
+			return err
+		}
+		*refs = value.(refsSnapshot) // Private snapshots are read-only; public refs are cloned.
+		return nil
+	}
 	return s.readSnapshotLimit(ctx, repositoryID, relative, target, maxJSONBytes)
 }
 
 func (s *Store) readManifest(ctx context.Context, repositoryID, relative string, target *objectManifest) error {
-	return s.readSnapshotLimit(ctx, repositoryID, relative, target, maxManifestBytes)
+	load := func(ctx context.Context) (any, int64, error) {
+		var result objectManifest
+		if err := s.readSnapshotLimit(ctx, repositoryID, relative, &result, maxManifestBytes); err != nil {
+			return nil, 0, err
+		}
+		if err := validateManifest(ctx, result); err != nil {
+			return nil, 0, err
+		}
+		return result, manifestMemoryBytes(result), nil
+	}
+	var value any
+	var err error
+	if s.cache == nil {
+		value, _, err = load(ctx)
+	} else {
+		value, err = s.cache.LoadMemory(ctx, "decoded-manifest:"+snapshotCacheKey(repositoryID, relative), load)
+	}
+	if err != nil {
+		return err
+	}
+	// All writers construct new manifests/maps; published manifests stay immutable.
+	*target = value.(objectManifest)
+	return nil
 }
 
 func (s *Store) readSnapshotLimit(ctx context.Context, repositoryID, relative string, target any, limit int64) error {
-	data, err := s.read(ctx, "repos/"+repositoryID+"/"+relative, limit)
+	data, err := s.snapshotData(ctx, repositoryID, relative, limit)
 	if err != nil {
-		return fmt.Errorf("read repository snapshot: %w", errors.Join(ErrCorrupt, err))
-	}
-	digest := sha256.Sum256(data)
-	if !strings.HasSuffix(relative, "-"+hex.EncodeToString(digest[:])+".json") {
-		return ErrCorrupt
+		return err
 	}
 	return decodeJSON(data, target)
 }
@@ -111,6 +151,10 @@ func objectKey(repositoryID, id string) string {
 }
 
 func (s *Store) object(ctx context.Context, snap snapshot, id, kind string) ([]byte, error) {
+	return s.cachedObject(ctx, snap, id, kind)
+}
+
+func (s *Store) readObject(ctx context.Context, snap snapshot, id, kind string) ([]byte, error) {
 	info, ok := snap.manifest.Objects[id]
 	if !ok || !objectIDPattern.MatchString(id) || info.Type != kind {
 		return nil, ErrCorrupt
@@ -119,15 +163,7 @@ func (s *Store) object(ctx context.Context, snap snapshot, id, kind string) ([]b
 		if !validObjectInfo(id, info) {
 			return nil, ErrCorrupt
 		}
-		body, _, err := s.objects.GetRange(ctx, "repos/"+snap.metadata.ID+"/"+info.PackKey, info.Offset, info.Length)
-		if err != nil {
-			return nil, errors.Join(ErrCorrupt, err)
-		}
-		object, readErr := gitpack.DecodeEntry(ctx, body, packEntry(id, info), MaxGitObjectBytes)
-		if err := errors.Join(readErr, body.Close()); err != nil {
-			return nil, errors.Join(ErrCorrupt, err)
-		}
-		return object.Data, nil
+		return s.packedObject(ctx, snap, id, info)
 	}
 	compressed, err := s.read(ctx, objectKey(snap.metadata.ID, id), maxObjectBytes+4096)
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/define42/GitOneS3/internal/cache"
 	"github.com/define42/GitOneS3/internal/shard"
 	"github.com/define42/GitOneS3/internal/storage"
 )
@@ -149,9 +150,10 @@ type Store struct {
 	objects      storage.ObjectStore
 	repositories *storage.Store
 	parser       *shard.Parser
+	cache        *cache.Cache
 }
 
-func New(objects storage.ObjectStore) (*Store, error) {
+func New(objects storage.ObjectStore, options ...Option) (*Store, error) {
 	repositories, err := storage.NewRepositoryStore(objects)
 	if err != nil {
 		return nil, err
@@ -160,7 +162,13 @@ func New(objects storage.ObjectStore) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{objects: objects, repositories: repositories, parser: parser}, nil
+	store := &Store{objects: objects, repositories: repositories, parser: parser}
+	for _, option := range options {
+		if option != nil {
+			option(store)
+		}
+	}
+	return store, nil
 }
 
 // ValidName reports whether a repository name is canonical and route-safe.
@@ -293,14 +301,8 @@ func (s *Store) load(ctx context.Context, namespace, name string) (snapshot, err
 	if err := s.readManifest(ctx, m.ID, state.PackManifest, &result.manifest); err != nil {
 		return snapshot{}, err
 	}
-	if result.refs.SchemaVersion != 1 || result.refs.Refs == nil || len(result.refs.Refs) > maxObjects ||
-		(result.manifest.SchemaVersion != 1 && result.manifest.SchemaVersion != 2) || result.manifest.ObjectFormat != "sha1" || result.manifest.Objects == nil || len(result.manifest.Objects) > maxObjects || !validLFSIndex(result.manifest.LFS) {
+	if result.refs.SchemaVersion != 1 || result.refs.Refs == nil || len(result.refs.Refs) > maxObjects {
 		return snapshot{}, ErrCorrupt
-	}
-	for id, info := range result.manifest.Objects {
-		if !validObjectInfo(id, info) || (result.manifest.SchemaVersion == 1 && info.PackKey != "") {
-			return snapshot{}, ErrCorrupt
-		}
 	}
 	for ref, id := range result.refs.Refs {
 		if !ValidRef(ref) || !objectIDPattern.MatchString(id) || result.manifest.Objects[id].Type == "" || (strings.HasPrefix(ref, "refs/heads/") && result.manifest.Objects[id].Type != "commit") {

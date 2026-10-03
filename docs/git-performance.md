@@ -51,15 +51,125 @@ incoming pack checksum is verified; only published reachable objects can be
 prefetched. This also coalesces dense base reads without making a one-base
 update download unrelated blobs. Every decoded entry still verifies its packed CRC, Git
 object ID and independent SHA-256. Downloaded full packs additionally verify the
-SHA-256 in their storage key. Caches belong to one operation and are removed
-when it closes.
+SHA-256 in their storage key. Temporary operation caches are removed when the
+operation closes; the shared serving cache below can retain verified content
+for later requests.
+
+## Shared serving cache
+
+The serving process shares one bounded cache between Git HTTP, Git SSH, and
+repository browser reads. RAM retains validated manifests, refs, decoded Git
+metadata and generation-specific graph indexes. The optional disk tier retains
+verified immutable snapshot bytes, packs, sparse pack entries, and outgoing
+clone packs. Repeated reads can therefore avoid S3 downloads and repeated
+parsing or graph reads.
+An oversized item falls back to the existing bounded read path.
+
+Clone requests with no client `have` history can reuse an outgoing pack keyed
+by the exact generation, selected object IDs, and encoding version. HTTP and
+SSH share the raw pack; negotiation and transport framing remain request-local.
+HTTP streams a pinned cached file without making another temporary copy.
+Incremental fetch responses are not retained. Building a clone pack reserves
+space based on its selected decoded objects: twice their bytes plus 1 KiB per
+object and 32 bytes, capped at the maximum pack size (1 GiB + 8 MiB). This cache
+estimate avoids reserving a large pack's space for a tiny clone. If space is
+unavailable or the encoded pack exceeds the estimate, the request uses the
+existing temporary-file path. The protocol's pack limit still applies. Active
+readers pin files against eviction. Source packs and outgoing packs share the
+same disk budget.
+
+| Setting | Direct binary / Compose default | Helm default |
+| --- | --- | --- |
+| `GITONE_CACHE_MEMORY_BYTES` | `256MiB` | `cache.memoryBytes: 256MiB` |
+| `GITONE_CACHE_DISK_BYTES` | `0` | `cache.diskBytes: 16GiB` |
+| `GITONE_CACHE_DIRECTORY` | unset | `/var/cache/gitone` |
+
+Zero disables each tier independently. Byte values accept `B`, `KiB`, `MiB`,
+`GiB`, `TiB`, and `PiB`, or a plain integer. Disk caching requires an absolute
+writable directory. The application namespaces cached content by S3 endpoint,
+region, and derived bucket, so reuse of a directory cannot mix different stores.
+The disk tier supports Linux, macOS, DragonFly BSD, FreeBSD, NetBSD, OpenBSD,
+and illumos. Other platforms can use the memory tier with disk caching disabled.
+Keep the disk budget below the filesystem/volume capacity with room for cache
+files and filesystem overhead. Helm's disk cache uses a 20 GiB `emptyDir`;
+replacement pods start cold. The cache is disposable and S3 remains authoritative.
+
+Memory accounting estimates retained cache values and entry overhead; it is not
+a process RSS limit. Active readers can retain references after eviction, and decoding,
+in-flight operations, Go's runtime, and filesystem page cache need additional
+memory. Add cache budgets to the operation resource bounds above. Shared cache
+storage and `TMPDIR` are separate budgets. Do not increase operation concurrency
+solely because a cache is enabled.
+
+The disk cache also caps its index at 100,000 entries to bound metadata for
+small objects. Restart recovery scans directory entries in batches instead of
+loading the entire directory listing into RAM. Entry-count pressure can evict
+cached content even when the disk byte budget is not full.
+
+### Freshness and integrity
+
+Current repository-state pointers, repository identity, tokens, permissions,
+and write preconditions continue to be read from their authority. Requests pin
+one immutable generation and only reuse content validated for that generation.
+Caching does not extend a revoked user's access to private repositories.
+
+A verified cache hit can continue serving known-good immutable content even if
+the corresponding S3 object is subsequently corrupted or removed outside
+GitOne. Serving requests therefore may not immediately detect that backend
+damage. Repository integrity, repack, restore, and collection operations bypass
+the serving cache and inspect authoritative storage. Use those checks to verify
+durability; set both cache budgets to zero when diagnosing uncached serving
+behavior. Existing S3 data needs no migration.
+
+### Qualify cold and warm workloads
+
+Measure both empty-cache and warmed-cache runs with representative repositories,
+namespace skew, and overlapping Git/browser traffic. Compare S3 request counts,
+cache hit/miss and eviction counters, latency, CPU, container memory, and disk
+usage. Include working sets larger than the configured budgets, cache loss,
+permission revocation, and a newly published generation. Cache metrics are
+appended to the existing authenticated `/system/metrics` endpoint. Cache budgets
+and local benchmark results do not establish a cluster user-capacity guarantee.
+
+### Local warm-cache measurements
+
+Measured on 2026-10-03 with Go 1.27.1, Linux/amd64, Intel Core i7-7700HQ,
+and one Go CPU. These are medians of six serial samples with a 300 ms benchmark
+target; fixture creation and warmup are excluded. The object store is in memory.
+Clone output includes sideband framing and is sent to `io.Discard`.
+
+| Operation | Baseline time | Warm time | Baseline allocated bytes | Warm allocated bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Prepare and send an 8 MiB binary clone | 142.25 ms | 6.79 ms | 50.66 MiB | 30.10 MiB |
+| Load, validate and select a 1,000-commit history | 76.31 ms | 0.173 ms | 50.45 MiB | 25.74 KiB |
+
+The clone comparison uses warm RAM metadata in both cases, with disk caching
+disabled in the baseline and a warm 4 GiB disk cache in the second case. Payload
+storage reads fall from one to zero per clone. The history comparison disables
+both tiers in the baseline and uses a warm 64 MiB RAM cache with disk disabled.
+Total storage reads fall from five to two; repository identity and current state
+are still read on every operation. Both comparisons use a 64 MiB RAM budget
+where RAM caching is enabled.
+
+`benchstat` reports time reductions of 95.23% for the clone and 99.77% for the
+history operation (`p=0.002`, six samples each). Allocated bytes are cumulative,
+not peak memory. These local results exclude real S3, authentication, ingress,
+network transfer and concurrent clients, so they do not establish production
+throughput or support for a million active users. Reproduce the samples serially:
+
+```sh
+go test ./internal/gittransport -run '^$' -bench '^BenchmarkPreparedPackClone$' \
+  -benchmem -count=6 -benchtime=300ms -cpu=1
+go test ./internal/repository -run '^$' -bench '^BenchmarkCachedHistory$' \
+  -benchmem -count=6 -benchtime=300ms -cpu=1
+```
 
 ## Repository browser bounds
 
 The repository page uses one `/browse` request for metadata, branches, and its
 directory/README, file, or commit history. The server loads and validates one
-published manifest per page, without caching repository authority or manifest
-contents between requests.
+published generation per page. Repository authority stays fresh, while verified
+immutable manifest contents can be shared between requests by the serving cache.
 
 Each shard admits at most four concurrent browser requests that load manifests.
 This shared limit also covers the individual repository metadata, branches,

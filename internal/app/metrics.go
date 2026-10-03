@@ -5,7 +5,20 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"strings"
+
+	"github.com/define42/GitOneS3/internal/cache"
 )
+
+// withCacheMetrics appends bounded cache metrics to the storage exposition.
+// The existing handler owns headers, HEAD responses and method validation.
+func withCacheMetrics(storageMetrics http.Handler, repositoryCache *cache.Cache) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		storageMetrics.ServeHTTP(response, request)
+		if request.Method == http.MethodGet && repositoryCache != nil {
+			repositoryCache.WritePrometheus(response)
+		}
+	})
+}
 
 // withMetrics reserves a path under the existing system namespace. Scrapes
 // always target this process; they must not follow repository shard routing.

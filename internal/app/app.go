@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/define42/GitOneS3/internal/auth"
+	"github.com/define42/GitOneS3/internal/cache"
 	"github.com/define42/GitOneS3/internal/config"
 	"github.com/define42/GitOneS3/internal/gittransport"
 	"github.com/define42/GitOneS3/internal/httpserver"
@@ -32,11 +33,12 @@ type App struct {
 	server           *httpserver.Server
 	sshServer        *sshserver.Server
 	forwardTransport *http.Transport
+	repositoryCache  *cache.Cache
 }
 
 // New validates immutable cluster identity, creates the fixed-bucket S3
 // adapter, and wires public and internal routing.
-func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, error) {
+func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *App, err error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -73,11 +75,23 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return nil, err
 	}
+	repositoryCache, err := newRepositoryCache(cfg)
+	if err != nil {
+		forwardTransport.CloseIdleConnections()
+		return nil, err
+	}
+	ready := false
+	defer func() {
+		if !ready {
+			forwardTransport.CloseIdleConnections()
+			err = errors.Join(err, repositoryCache.Close())
+		}
+	}()
 	var ownerHandler http.Handler = protocol.NewHandler(nil, nil)
 	var requestRouter proxy.Router = router
 	var sshServer *sshserver.Server
 	if cfg.Auth.Enabled {
-		repositories, err := repository.New(objectStore)
+		repositories, err := repository.New(objectStore, repository.WithCache(repositoryCache))
 		if err != nil {
 			return nil, fmt.Errorf("create repository store: %w", err)
 		}
@@ -109,7 +123,8 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		authHandler, err := auth.New(auth.Options{
 			Config: cfg.Auth, LocalShard: shard.ShardID(cfg.LocalShard),
 			Router: router, Store: objectStore, Provider: provider, Next: ownerHandler,
-			TokenResolver: destinationResolver, TokenTransport: forwardTransport,
+			RepositoryCache: repositoryCache,
+			TokenResolver:   destinationResolver, TokenTransport: forwardTransport,
 			SSHPublicURL: cfg.SSH.PublicURL, SpaceDiscoveryMode: cfg.SpaceDiscoveryMode,
 		})
 		if err != nil {
@@ -161,7 +176,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 
 	shardLogger := logger.With("shard_id", cfg.LocalShard)
 	publicHandler := httpserver.WithHealth(
-		httpserver.LogRequests(withMetrics(uiHandler, objectStore, cfg.MetricsToken), shardLogger),
+		httpserver.LogRequests(withMetrics(uiHandler, withCacheMetrics(objectStore, repositoryCache), cfg.MetricsToken), shardLogger),
 		resources.store,
 	)
 	server, err := httpserver.New(
@@ -173,12 +188,13 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		return nil, fmt.Errorf("create HTTP server: %w", err)
 	}
 
-	return &App{server: server, sshServer: sshServer, forwardTransport: forwardTransport}, nil
+	ready = true
+	return &App{server: server, sshServer: sshServer, forwardTransport: forwardTransport, repositoryCache: repositoryCache}, nil
 }
 
 // Run serves until context cancellation or a listener error.
-func (a *App) Run(ctx context.Context) error {
-	defer a.forwardTransport.CloseIdleConnections()
+func (a *App) Run(ctx context.Context) (err error) {
+	defer func() { err = errors.Join(err, a.Close()) }()
 	if a.sshServer == nil {
 		return a.server.Run(ctx)
 	}
@@ -190,6 +206,18 @@ func (a *App) Run(ctx context.Context) error {
 	first := <-results
 	cancel()
 	return errors.Join(first, <-results)
+}
+
+// Close releases resources after serving stops, or if Run will not be called.
+// Run closes resources automatically after HTTP and SSH workers have stopped.
+func (a *App) Close() error {
+	if a.forwardTransport != nil {
+		a.forwardTransport.CloseIdleConnections()
+	}
+	if a.repositoryCache != nil {
+		return a.repositoryCache.Close()
+	}
+	return nil
 }
 
 func listenAddress(host string, port uint16) string {

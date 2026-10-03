@@ -124,7 +124,7 @@ func (h *Handler) uploadSSH(ctx context.Context, snapshot *repository.GitSnapsho
 				return err
 			}
 		}
-		return n.writePack(ctx, snapshot, objectReader, stream)
+		return n.writePack(ctx, objectReader, h.store.SharedCache(), stream)
 	}
 }
 

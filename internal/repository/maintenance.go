@@ -87,6 +87,7 @@ type RestoreReport struct {
 // CheckIntegrity verifies snapshot digests, every object's Git SHA-1 and
 // SHA-256, and typed graph connectivity. It reads one object body at a time.
 func (s *Store) CheckIntegrity(ctx context.Context, namespace, name string) (IntegrityReport, error) {
+	s = s.withoutCache()
 	snap, err := s.load(ctx, namespace, name)
 	if err != nil {
 		return IntegrityReport{}, err
@@ -106,6 +107,7 @@ func (s *Store) CheckIntegrity(ctx context.Context, namespace, name string) (Int
 // an already pinned reader remains valid for any duration. This includes
 // abandoned proposals written before a failed compare-and-swap publication.
 func (s *Store) ListGenerations(ctx context.Context, namespace, name string) ([]Generation, error) {
+	s = s.withoutCache()
 	snap, err := s.maintenanceBase(ctx, namespace, name)
 	if err != nil {
 		return nil, err
@@ -146,6 +148,7 @@ func (s *Store) ListGenerations(ctx context.Context, namespace, name string) ([]
 // RestoreGeneration verifies a retained snapshot before atomically publishing
 // its refs and manifest as a new generation. Existing history remains intact.
 func (s *Store) RestoreGeneration(ctx context.Context, namespace, name, source string) (report RestoreReport, err error) {
+	s = s.withoutCache()
 	if !stateSnapshotPattern.MatchString(source) {
 		return report, ErrInvalid
 	}
@@ -188,6 +191,7 @@ func (s *Store) RestoreGeneration(ctx context.Context, namespace, name, source s
 // same durable lock as writers and restore throughout marking and deletion.
 // All retained graphs must pass integrity checks before any deletion begins.
 func (s *Store) GarbageCollect(ctx context.Context, namespace, name string, options GCOptions) (report GCReport, err error) {
+	s = s.withoutCache()
 	if options.GracePeriod < 0 {
 		return report, ErrInvalid
 	}

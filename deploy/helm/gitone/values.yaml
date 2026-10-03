@@ -96,6 +96,10 @@ path:
   maxDepth: 32
 
 cache:
+  # Shared verified immutable content; zero disables each tier independently.
+  memoryBytes: 256MiB
+  diskBytes: 16GiB
+  # Leave space above diskBytes for cache files and filesystem overhead.
   sizeLimit: 20Gi
 
 workspace:

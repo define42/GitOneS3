@@ -16,9 +16,9 @@ type BrowseResult struct {
 	Commits  []Commit
 }
 
-// Browse reads one fresh snapshot for metadata, branches, and the selected page.
-// The manifest is validated once and remains local to this request; neither
-// repository identity nor immutable content is cached across requests.
+// Browse pins one published generation for metadata, branches, and the selected page.
+// Repository identity and state are read freshly; verified immutable content may
+// be shared across requests through the configured serving cache.
 func (s *Store) Browse(ctx context.Context, namespace, name, ref, path string, history bool) (BrowseResult, error) {
 	if !validPath(path) {
 		return BrowseResult{}, ErrInvalid
