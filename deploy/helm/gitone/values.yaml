@@ -152,4 +152,6 @@ pdb:
   enabled: false
   maxUnavailable: 1
 
+# HTTP allows 30s to drain, then up to 60s to cancel and join handlers. Keep the
+# pod grace above 90s so repository lock and multipart cleanup can finish.
 terminationGracePeriodSeconds: 120

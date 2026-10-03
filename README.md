@@ -197,6 +197,12 @@ timeouts and connection limits as additional protection, allowing enough time
 for supported Git and LFS transfers. See [LFS configuration](docs/git-lfs.md#configuration)
 for separate transfer limits and memory guidance.
 
+On shutdown, HTTP allows 30 seconds for requests to finish, then cancels and
+joins remaining handlers for up to 60 seconds so durable locks and multipart
+uploads can be cleaned up. Keep the deployment's termination grace above
+90 seconds; Helm and Compose use 120 seconds. Interrupted clients may need to
+retry. See [shutdown and recovery](docs/production-qualification.md#shutdown-and-interrupted-transfers).
+
 ## Local Development
 
 `make run` starts four GitOne instances, MinIO, Keycloak and a local HTTPS proxy

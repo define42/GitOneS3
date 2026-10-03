@@ -6,6 +6,8 @@ x-gitone: &gitone
     context: .
     target: development
   restart: unless-stopped
+  # Allow the HTTP drain and cancellation cleanup to finish before SIGKILL.
+  stop_grace_period: 120s
   env_file:
     - path: ./.local/gitone.env
       required: false # make run generates this before starting the stack

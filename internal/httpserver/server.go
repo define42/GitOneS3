@@ -18,6 +18,7 @@ const (
 	defaultBodyReadTimeout   = 30 * time.Second
 	defaultIdleTimeout       = 2 * time.Minute
 	defaultShutdownTimeout   = 30 * time.Second
+	defaultCleanupTimeout    = 60 * time.Second
 	defaultReadinessTimeout  = 3 * time.Second
 	defaultMaxHeaderBytes    = 1 << 20
 )
@@ -31,6 +32,7 @@ type Checker interface {
 type Server struct {
 	httpServer *http.Server
 	logger     *slog.Logger
+	requests   *requestDrain
 }
 
 // New constructs an HTTP server with a default request-body read deadline.
@@ -46,7 +48,10 @@ func New(address string, handler http.Handler, logger *slog.Logger) (*Server, er
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{httpServer: newServer(address, handler), logger: logger}, nil
+	server := newServer(address, handler)
+	requests := newRequestDrain(server.Handler)
+	server.Handler = requests
+	return &Server{httpServer: server, logger: logger, requests: requests}, nil
 }
 
 // Run serves until context cancellation or a listener failure, then shuts down.
@@ -60,6 +65,17 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		return fmt.Errorf("listen HTTP: %w", err)
 	}
+	return s.serve(ctx, listener)
+}
+
+// serve owns listener and all admitted request handlers until shutdown finishes
+// or the bounded cleanup window expires.
+func (s *Server) serve(ctx context.Context, listener net.Listener) error {
+	// SIGTERM starts the graceful drain. Requests keep their contexts until
+	// that drain expires, when cancellation also interrupts non-socket work.
+	requestCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelRequests()
+	s.httpServer.BaseContext = func(net.Listener) context.Context { return requestCtx }
 	s.logger.InfoContext(ctx, "http server starting", "address", listener.Addr().String())
 	serveErrors := make(chan error, 1)
 	go func() {
@@ -78,16 +94,26 @@ func (s *Server) Run(ctx context.Context) error {
 		stopped = true
 	}
 
+	// Seal admission before waiting: an accepted connection may not have
+	// entered its handler yet, and must not start storage work during cleanup.
+	s.requests.stop()
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultShutdownTimeout)
-	defer cancel()
 	shutdownErr := s.httpServer.Shutdown(shutdownCtx)
+	cancel()
+	cancelRequests()
 	if shutdownErr != nil {
 		shutdownErr = errors.Join(shutdownErr, s.httpServer.Close())
 	}
+	// Close cancels network I/O but does not join handlers. Repository lock
+	// release and LFS abort/accounting use detached, bounded cleanup contexts;
+	// the process must remain alive for those defers to complete.
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), defaultCleanupTimeout)
+	cleanupErr := s.requests.wait(cleanupCtx)
+	cancelCleanup()
 	if !stopped {
 		runErr = <-serveErrors
 	}
-	if err := errors.Join(runErr, shutdownErr); err != nil {
+	if err := errors.Join(runErr, shutdownErr, cleanupErr); err != nil {
 		return fmt.Errorf("run HTTP server: %w", err)
 	}
 	return nil

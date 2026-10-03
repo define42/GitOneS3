@@ -61,6 +61,32 @@ client tail latency, HTTP rejection rates and
 slow clients, overlapping LFS traffic and scheduled maintenance. A passing
 small fixture alone is insufficient evidence for maximum-size repositories.
 
+## Shutdown and interrupted transfers
+
+On SIGTERM or SIGINT, HTTP stops accepting connections and allows active
+requests 30 seconds to finish. It then cancels remaining requests, closes their
+connections, and waits up to another 60 seconds for handlers to release durable
+locks, clean up multipart uploads and remove temporary workspaces. SSH cancels
+its sessions immediately and joins their workers. The application waits for
+both servers before exiting.
+
+Keep the container or service-manager termination grace above 90 seconds. Helm
+and Compose default to 120 seconds, leaving room beyond the HTTP drain and
+cleanup phases. Avoid overriding that grace with a shorter stop timeout.
+Requests interrupted during shutdown may need a client retry; a long LFS
+transfer is not guaranteed to finish within the drain window. Stop new traffic
+and let active transfers finish before planned maintenance when uninterrupted
+completion is required.
+
+Exercise termination during both Git publication and LFS upload against the
+intended provider. After restarting, verify that another write succeeds and
+that interrupted uploads have been released or remain correctly charged.
+SIGKILL, exhausted cleanup deadlines, or provider failures can still leave a
+durable lock or reservation. Follow the
+[offline lock recovery procedure](repository-maintenance.md#recover-a-lock-after-a-crash)
+and LFS garbage collection guidance; do not clear a lock while its writer might
+still run.
+
 ## Upgrade and recovery
 
 Drain older readers and writers before upgrading; mixed versions are unsupported.

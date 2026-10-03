@@ -149,6 +149,13 @@ docker compose ps        # inspect all four GitOne instances and dependencies
 make run-local           # old bare Go process; requires your own environment
 ```
 
+Each GitOne container has a 120-second stop grace period. `make stop` lets HTTP
+drain for 30 seconds, then cancel and join remaining handlers for up to another
+60 seconds so durable locks and multipart uploads can be cleaned up. SSH
+sessions are canceled and joined. Interrupted clients may need to retry after
+restart. Avoid `docker kill` or a shorter stop-timeout override; forced
+termination can require [offline recovery](../../docs/production-qualification.md#shutdown-and-interrupted-transfers).
+
 The smoke test uses real Keycloak login forms, the fixed callback, MinIO-backed
 claims and transactions, and shared cookies through the round-robin proxy.
 It checks all four shard readiness endpoints, invites/accepts a member, enforces

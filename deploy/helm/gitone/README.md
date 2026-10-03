@@ -18,6 +18,17 @@ index refuse startup in this mode. Deploy the new image with
 `indexed` and replace pods again. Do not backfill while any older writer remains.
 See the [migration and rollback procedure](../../../docs/space-discovery.md).
 
+## Shutdown
+
+Keep `terminationGracePeriodSeconds` above 90 seconds; its default is 120.
+HTTP has a 30-second drain followed by up to 60 seconds to cancel and join
+remaining handlers, including durable lock and multipart cleanup. SSH cancels
+its sessions immediately and waits for their workers. Interrupted transfers may
+need a retry.
+Drain traffic before planned maintenance when transfers must finish, and see
+[shutdown and recovery](../../../docs/production-qualification.md#shutdown-and-interrupted-transfers)
+for provider failures or forced termination.
+
 ## Storage metrics
 
 Set `metrics.existingSecret` to an existing Secret with a `metrics-token` key
